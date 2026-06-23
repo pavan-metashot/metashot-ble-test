@@ -46,7 +46,8 @@
   <h1>Metashot BLE Test</h1>
   <span id="status" style="color:var(--mut)">Disconnected</span>
   <span class="grow"></span>
-  <button id="connect">Connect</button>
+  <button id="connect">Connect BLE</button>
+  <button id="connectSerial" class="sec">Connect Serial</button>
   <button id="disconnect" class="sec" disabled>Disconnect</button>
 </header>
 
@@ -146,25 +147,28 @@ function applyQuat(w,x,y,z) {
   $('cube').style.transform = css;
 }
 
-function onQuat(e) {
-  const v = e.target.value; // DataView, 16 bytes LE, order [Z,X,Y,W] x10000
-  const Z = v.getInt32(0,true)/10000, X = v.getInt32(4,true)/10000,
-        Y = v.getInt32(8,true)/10000, W = v.getInt32(12,true)/10000;
+// Shared renderers — used by both BLE and Serial paths
+function renderQuat(W,X,Y,Z) {
   $('qw').textContent=W.toFixed(4); $('qx').textContent=X.toFixed(4);
   $('qy').textContent=Y.toFixed(4); $('qz').textContent=Z.toFixed(4);
   applyQuat(W,X,Y,Z);
   qCount++; const now=performance.now();
   if (now-qLast>=1000){ $('qhz').textContent=(qCount*1000/(now-qLast)).toFixed(0)+' Hz'; qCount=0; qLast=now; }
 }
-
-function onRaw(e) {
-  const v = e.target.value; // 12 bytes, float32[3] LE
-  const x=v.getFloat32(0,true), y=v.getFloat32(4,true), z=v.getFloat32(8,true);
+function renderAccel(x,y,z) {
   $('ax').textContent=x.toFixed(3); $('ay').textContent=y.toFixed(3); $('az').textContent=z.toFixed(3);
   $('amag').textContent=Math.hypot(x,y,z).toFixed(3)+' g';
   const pct = a => Math.min(100,Math.abs(a)/2*100); // ±2g range for the bar
   $('bx').style.width=pct(x)+'%'; $('by').style.width=pct(y)+'%'; $('bz').style.width=pct(z)+'%';
 }
+
+// BLE quat: 16 bytes LE, order [Z,X,Y,W] x10000
+function onQuat(e) { const v=e.target.value;
+  renderQuat(v.getInt32(12,true)/10000, v.getInt32(4,true)/10000,
+             v.getInt32(8,true)/10000, v.getInt32(0,true)/10000); }
+// BLE raw: 12 bytes float32[3] in g
+function onRaw(e) { const v=e.target.value;
+  renderAccel(v.getFloat32(0,true), v.getFloat32(4,true), v.getFloat32(8,true)); }
 
 function onCmd(e){ log('Command notify: '+[...new Uint8Array(e.target.value.buffer)].join(' ')); }
 function onDtap(e){ log('DoubleTap event: '+e.target.value.getUint8(0)); }
@@ -222,8 +226,65 @@ async function connect() {
   } catch (err) { log('Error: '+err.message); }
 }
 
+// ---- Web Serial (UART) ----
+let port, sreader, serialOn = false;
+function setSerial(on) {
+  serialOn = on;
+  const anyConn = on || !!device?.gatt?.connected;
+  $('dot').classList.toggle('on', anyConn);
+  $('status').textContent = on ? 'Serial connected (UART)' : (device?.gatt?.connected ? 'Connected' : 'Disconnected');
+  $('status').style.color = anyConn ? 'var(--ok)' : 'var(--mut)';
+  $('connectSerial').disabled = on;
+  $('disconnect').disabled = !anyConn;
+}
+async function connectSerial() {
+  if (!navigator.serial) { alert('Web Serial needs desktop Chrome or Edge (not mobile).'); return; }
+  try {
+    log('Requesting serial port…');
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    log('Serial connected @115200. Streaming quaternion from UART.');
+    setSerial(true);
+    pumpSerial();
+  } catch (e) { log('Serial error: ' + e.message); }
+}
+async function pumpSerial() {
+  const dec = new TextDecoderStream();
+  port.readable.pipeTo(dec.writable).catch(()=>{});
+  sreader = dec.readable.getReader();
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await sreader.read();
+      if (done) break;
+      buf += value;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        parseSerial(line);
+      }
+    }
+  } catch (e) { log('Serial read stopped: ' + e.message); }
+}
+function parseSerial(line) {
+  // Firmware: "Q,Z,X,Y,W" (x10000) and "A,x,y,z" (mg)
+  if (line.startsWith('Q,')) { const p = line.split(',');
+    if (p.length >= 5) renderQuat(+p[4]/10000, +p[2]/10000, +p[3]/10000, +p[1]/10000); }
+  else if (line.startsWith('A,')) { const p = line.split(',');
+    if (p.length >= 4) renderAccel(+p[1]/1000, +p[2]/1000, +p[3]/1000); }
+}
+async function disconnectSerial() {
+  try { if (sreader) await sreader.cancel(); } catch {}
+  try { if (port) await port.close(); } catch {}
+  port = null; sreader = null; setSerial(false); log('Serial disconnected.');
+}
+
 $('connect').onclick = connect;
-$('disconnect').onclick = () => { if (device?.gatt.connected) device.gatt.disconnect(); };
+$('connectSerial').onclick = connectSerial;
+$('disconnect').onclick = () => {
+  if (device?.gatt?.connected) device.gatt.disconnect();
+  if (serialOn) disconnectSerial();
+};
 $('sendcmd').onclick = async () => {
   try { await chars.cmd.writeValue(Uint8Array.of(+$('cmdval').value & 0xff)); log('Wrote command '+$('cmdval').value); }
   catch(e){ log('Write failed: '+e.message); }
