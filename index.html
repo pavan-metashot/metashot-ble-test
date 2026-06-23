@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Metashot BLE Test</title>
+<style>
+  :root { --bg:#0e1116; --panel:#171c24; --line:#262d38; --txt:#e6edf3; --mut:#8b97a7;
+          --acc:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.4 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0; font-weight:600; }
+  .grow { flex:1; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-weight:600; cursor:pointer; }
+  button.sec { background:#222b38; color:var(--txt); border:1px solid var(--line); }
+  button.danger { background:var(--err); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  #dot { width:10px; height:10px; border-radius:50%; background:var(--err); }
+  #dot.on { background:var(--ok); }
+  main { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:14px; padding:18px; max-width:1200px; margin:0 auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); margin:0 0 12px; }
+  .row { display:flex; justify-content:space-between; padding:4px 0; font-variant-numeric:tabular-nums; }
+  .row span:first-child { color:var(--mut); }
+  .big { font-size:28px; font-weight:700; font-variant-numeric:tabular-nums; }
+  /* 3D cube */
+  .scene { perspective:600px; height:200px; display:flex; align-items:center; justify-content:center; }
+  .cube { width:90px; height:90px; position:relative; transform-style:preserve-3d; transition:transform .03s linear; }
+  .face { position:absolute; width:90px; height:90px; border:2px solid #0e1116; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; color:#0e1116; opacity:.92; }
+  .fz1{background:#3b82f6;transform:translateZ(45px)} .fz2{background:#1d4ed8;transform:rotateY(180deg) translateZ(45px)}
+  .fx1{background:#22c55e;transform:rotateY(90deg) translateZ(45px)} .fx2{background:#15803d;transform:rotateY(-90deg) translateZ(45px)}
+  .fy1{background:#f59e0b;transform:rotateX(90deg) translateZ(45px)} .fy2{background:#b45309;transform:rotateX(-90deg) translateZ(45px)}
+  .bar { height:8px; background:#222b38; border-radius:4px; overflow:hidden; margin-top:4px; }
+  .bar > i { display:block; height:100%; background:var(--acc); width:50%; }
+  #log { height:150px; overflow:auto; background:#0b0e13; border:1px solid var(--line); border-radius:8px; padding:8px; font-family:ui-monospace,Consolas,monospace; font-size:12px; color:var(--mut); white-space:pre-wrap; }
+  .ctl { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  input[type=number] { width:90px; background:#0b0e13; border:1px solid var(--line); color:var(--txt); border-radius:6px; padding:6px 8px; }
+  .hint { color:var(--mut); font-size:12px; margin-top:8px; }
+  a { color:var(--acc); }
+</style>
+</head>
+<body>
+<header>
+  <span id="dot"></span>
+  <h1>Metashot BLE Test</h1>
+  <span id="status" style="color:var(--mut)">Disconnected</span>
+  <span class="grow"></span>
+  <button id="connect">Connect</button>
+  <button id="disconnect" class="sec" disabled>Disconnect</button>
+</header>
+
+<main>
+  <div class="card">
+    <h2>Orientation (quaternion)</h2>
+    <div class="scene"><div class="cube" id="cube">
+      <div class="face fz1">+Z</div><div class="face fz2">-Z</div>
+      <div class="face fx1">+X</div><div class="face fx2">-X</div>
+      <div class="face fy1">+Y</div><div class="face fy2">-Y</div>
+    </div></div>
+    <div class="row"><span>W</span><span id="qw">—</span></div>
+    <div class="row"><span>X</span><span id="qx">—</span></div>
+    <div class="row"><span>Y</span><span id="qy">—</span></div>
+    <div class="row"><span>Z</span><span id="qz">—</span></div>
+    <div class="row"><span>rate</span><span id="qhz">— Hz</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Raw accelerometer (g)</h2>
+    <div class="row"><span>X</span><span id="ax">—</span></div><div class="bar"><i id="bx"></i></div>
+    <div class="row"><span>Y</span><span id="ay">—</span></div><div class="bar"><i id="by"></i></div>
+    <div class="row"><span>Z</span><span id="az">—</span></div><div class="bar"><i id="bz"></i></div>
+    <div class="row" style="margin-top:8px"><span>|a|</span><span id="amag">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Battery</h2>
+    <div class="big"><span id="batt">—</span>%</div>
+    <div class="bar" style="height:12px;margin-top:10px"><i id="battbar" style="background:var(--ok)"></i></div>
+  </div>
+
+  <div class="card">
+    <h2>Device</h2>
+    <div class="row"><span>Name</span><span id="dname">—</span></div>
+    <div class="row"><span>MAC</span><span id="dmac">—</span></div>
+    <div class="row"><span>Manufacturer</span><span id="dmanu">—</span></div>
+    <div class="row"><span>Model</span><span id="dmodel">—</span></div>
+    <div class="row"><span>FW</span><span id="dfw">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Controls</h2>
+    <div class="ctl">
+      <input type="number" id="cmdval" value="10" min="0" max="255" />
+      <button id="sendcmd" class="sec" disabled>Write Command (0x0401)</button>
+    </div>
+    <div class="ctl">
+      <button id="ship" class="danger" disabled>Ship Mode (0x0408 ← 0x01)</button>
+    </div>
+    <div class="hint">Command 10 = short vibration burst (per firmware).</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Events / Log</h2>
+    <div id="log"></div>
+  </div>
+</main>
+
+<script>
+const U = {
+  svc:  'ef680400-9b35-4933-9b10-52ffa9740042',
+  quat: 'ef680404-9b35-4933-9b10-52ffa9740042',
+  raw:  'ef680405-9b35-4933-9b10-52ffa9740042',
+  cmd:  'ef680401-9b35-4933-9b10-52ffa9740042',
+  dtap: 'ef680407-9b35-4933-9b10-52ffa9740042',
+  mac:  'ef680499-9b35-4933-9b10-52ffa9740042',
+  ship: 'ef680408-9b35-4933-9b10-52ffa9740042',
+};
+const $ = id => document.getElementById(id);
+const log = (m) => { const l=$('log'); const t=new Date().toLocaleTimeString();
+  l.textContent += `[${t}] ${m}\n`; l.scrollTop = l.scrollHeight; };
+
+let device, server, chars = {};
+let qCount = 0, qLast = performance.now();
+
+function setConnected(on) {
+  $('dot').classList.toggle('on', on);
+  $('status').textContent = on ? 'Connected' : 'Disconnected';
+  $('status').style.color = on ? 'var(--ok)' : 'var(--mut)';
+  $('connect').disabled = on; $('disconnect').disabled = !on;
+  $('sendcmd').disabled = !on; $('ship').disabled = !on;
+}
+
+// quaternion (w,x,y,z) -> CSS matrix3d (column-major), with a 90° tilt so it reads nicely
+function applyQuat(w,x,y,z) {
+  const n = Math.hypot(w,x,y,z) || 1; w/=n; x/=n; y/=n; z/=n;
+  const xx=x*x, yy=y*y, zz=z*z, xy=x*y, xz=x*z, yz=y*z, wx=w*x, wy=w*y, wz=w*z;
+  // row-major rotation
+  const m = [
+    1-2*(yy+zz), 2*(xy-wz),   2*(xz+wy),
+    2*(xy+wz),   1-2*(xx+zz), 2*(yz-wx),
+    2*(xz-wy),   2*(yz+wx),   1-2*(xx+yy)
+  ];
+  // CSS matrix3d is column-major
+  const css = `matrix3d(${m[0]},${m[3]},${m[6]},0, ${m[1]},${m[4]},${m[7]},0, ${m[2]},${m[5]},${m[8]},0, 0,0,0,1)`;
+  $('cube').style.transform = css;
+}
+
+function onQuat(e) {
+  const v = e.target.value; // DataView, 16 bytes LE, order [Z,X,Y,W] x10000
+  const Z = v.getInt32(0,true)/10000, X = v.getInt32(4,true)/10000,
+        Y = v.getInt32(8,true)/10000, W = v.getInt32(12,true)/10000;
+  $('qw').textContent=W.toFixed(4); $('qx').textContent=X.toFixed(4);
+  $('qy').textContent=Y.toFixed(4); $('qz').textContent=Z.toFixed(4);
+  applyQuat(W,X,Y,Z);
+  qCount++; const now=performance.now();
+  if (now-qLast>=1000){ $('qhz').textContent=(qCount*1000/(now-qLast)).toFixed(0)+' Hz'; qCount=0; qLast=now; }
+}
+
+function onRaw(e) {
+  const v = e.target.value; // 12 bytes, float32[3] LE
+  const x=v.getFloat32(0,true), y=v.getFloat32(4,true), z=v.getFloat32(8,true);
+  $('ax').textContent=x.toFixed(3); $('ay').textContent=y.toFixed(3); $('az').textContent=z.toFixed(3);
+  $('amag').textContent=Math.hypot(x,y,z).toFixed(3)+' g';
+  const pct = a => Math.min(100,Math.abs(a)/2*100); // ±2g range for the bar
+  $('bx').style.width=pct(x)+'%'; $('by').style.width=pct(y)+'%'; $('bz').style.width=pct(z)+'%';
+}
+
+function onCmd(e){ log('Command notify: '+[...new Uint8Array(e.target.value.buffer)].join(' ')); }
+function onDtap(e){ log('DoubleTap event: '+e.target.value.getUint8(0)); }
+function onBatt(e){ const p=e.target.value.getUint8(0); $('batt').textContent=p; $('battbar').style.width=p+'%';
+  $('battbar').style.background = p<20?'var(--err)':p<50?'var(--warn)':'var(--ok)'; }
+
+async function readText(svcUuid, charUuid) {
+  try { const s=await server.getPrimaryService(svcUuid); const c=await s.getCharacteristic(charUuid);
+    const v=await c.readValue(); return new TextDecoder().decode(v); } catch { return '—'; }
+}
+
+async function connect() {
+  if (!navigator.bluetooth) { alert('Web Bluetooth not available. Use Chrome/Edge over https or localhost.'); return; }
+  try {
+    log('Requesting device…');
+    device = await navigator.bluetooth.requestDevice({
+      filters:[{namePrefix:'Metashot'}],
+      optionalServices:[U.svc, 'battery_service', 'device_information']
+    });
+    $('dname').textContent = device.name || '—';
+    device.addEventListener('gattserverdisconnected', () => { setConnected(false); log('Disconnected.'); });
+    log('Connecting GATT…');
+    server = await device.gatt.connect();
+
+    const svc = await server.getPrimaryService(U.svc);
+    const get = u => svc.getCharacteristic(u);
+    chars.quat = await get(U.quat); chars.raw = await get(U.raw);
+    chars.cmd = await get(U.cmd);  chars.dtap = await get(U.dtap);
+    chars.mac = await get(U.mac);  chars.ship = await get(U.ship);
+
+    // MAC (read)
+    try { const m=new Uint8Array((await chars.mac.readValue()).buffer);
+      $('dmac').textContent=[...m].reverse().map(b=>b.toString(16).padStart(2,'0')).join(':').toUpperCase(); } catch {}
+
+    // DIS
+    $('dmanu').textContent  = await readText('device_information','manufacturer_name_string');
+    $('dmodel').textContent = await readText('device_information','model_number_string');
+    $('dfw').textContent    = await readText('device_information','firmware_revision_string');
+
+    // Battery
+    try { const bs=await server.getPrimaryService('battery_service');
+      const bc=await bs.getCharacteristic('battery_level');
+      onBatt({target:{value:await bc.readValue()}});
+      await bc.startNotifications(); bc.addEventListener('characteristicvaluechanged', onBatt);
+    } catch { log('No battery service.'); }
+
+    // Notifications
+    chars.quat.addEventListener('characteristicvaluechanged', onQuat); await chars.quat.startNotifications();
+    chars.raw.addEventListener('characteristicvaluechanged', onRaw);  await chars.raw.startNotifications();
+    chars.cmd.addEventListener('characteristicvaluechanged', onCmd);  await chars.cmd.startNotifications();
+    chars.dtap.addEventListener('characteristicvaluechanged', onDtap);await chars.dtap.startNotifications();
+
+    setConnected(true);
+    log('Ready. Streaming quaternion + raw accel.');
+  } catch (err) { log('Error: '+err.message); }
+}
+
+$('connect').onclick = connect;
+$('disconnect').onclick = () => { if (device?.gatt.connected) device.gatt.disconnect(); };
+$('sendcmd').onclick = async () => {
+  try { await chars.cmd.writeValue(Uint8Array.of(+$('cmdval').value & 0xff)); log('Wrote command '+$('cmdval').value); }
+  catch(e){ log('Write failed: '+e.message); }
+};
+$('ship').onclick = async () => {
+  if (!confirm('Put device into PMIC ship mode? It will power off.')) return;
+  try { await chars.ship.writeValue(Uint8Array.of(0x01)); log('Ship mode requested.'); }
+  catch(e){ log('Ship write failed: '+e.message); }
+};
+
+if (!navigator.bluetooth) log('Web Bluetooth not supported here. Use desktop Chrome or Edge.');
+</script>
+</body>
+</html>
