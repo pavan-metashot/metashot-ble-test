@@ -162,13 +162,13 @@ function renderAccel(x,y,z) {
   $('bx').style.width=pct(x)+'%'; $('by').style.width=pct(y)+'%'; $('bz').style.width=pct(z)+'%';
 }
 
-// BLE quat: 8 bytes LE int16[4], order [Z,X,Y,W] x10000
+// BLE quat: 16 bytes LE, order [Z,X,Y,W] x10000
 function onQuat(e) { const v=e.target.value;
-  renderQuat(v.getInt16(6,true)/10000, v.getInt16(2,true)/10000,
-             v.getInt16(4,true)/10000, v.getInt16(0,true)/10000); }
-// BLE raw: 6 bytes LE int16[3] in milli-g
+  renderQuat(v.getInt32(12,true)/10000, v.getInt32(4,true)/10000,
+             v.getInt32(8,true)/10000, v.getInt32(0,true)/10000); }
+// BLE raw: 12 bytes float32[3] in g
 function onRaw(e) { const v=e.target.value;
-  renderAccel(v.getInt16(0,true)/1000, v.getInt16(2,true)/1000, v.getInt16(4,true)/1000); }
+  renderAccel(v.getFloat32(0,true), v.getFloat32(4,true), v.getFloat32(8,true)); }
 
 function onCmd(e){ log('Command notify: '+[...new Uint8Array(e.target.value.buffer)].join(' ')); }
 function onDtap(e){ log('DoubleTap event: '+e.target.value.getUint8(0)); }
