@@ -101,6 +101,19 @@
     <div class="hint">Command 10 = short vibration burst (per firmware).</div>
   </div>
 
+  <div class="card">
+    <h2>Capture / Plot</h2>
+    <div class="ctl">
+      <button id="capture" class="sec">● Capture</button>
+      <button id="cancelCap" class="sec" disabled>Cancel</button>
+    </div>
+    <div class="row"><span>Status</span><span id="capStatus">idle</span></div>
+    <div class="row"><span>Samples</span><span id="capCount">0</span></div>
+    <input type="text" id="sheetUrl" placeholder="Google Apps Script URL (optional)"
+           style="width:100%;margin-top:8px;background:#0b0e13;border:1px solid var(--line);color:var(--txt);border-radius:6px;padding:6px 8px" />
+    <div class="hint">Records quaternion + accel (BLE or UART). Stop &amp; Save downloads a CSV and, if a URL is set, pushes rows to your Google Sheet.</div>
+  </div>
+
   <div class="card" style="grid-column:1/-1">
     <h2>Events / Log</h2>
     <div id="log"></div>
@@ -154,8 +167,10 @@ function renderQuat(W,X,Y,Z) {
   applyQuat(W,X,Y,Z);
   qCount++; const now=performance.now();
   if (now-qLast>=1000){ $('qhz').textContent=(qCount*1000/(now-qLast)).toFixed(0)+' Hz'; qCount=0; qLast=now; }
+  if (recording) recordSample(W,X,Y,Z);
 }
 function renderAccel(x,y,z) {
+  lastAccel = [x,y,z];
   $('ax').textContent=x.toFixed(3); $('ay').textContent=y.toFixed(3); $('az').textContent=z.toFixed(3);
   $('amag').textContent=Math.hypot(x,y,z).toFixed(3)+' g';
   const pct = a => Math.min(100,Math.abs(a)/2*100); // ±2g range for the bar
@@ -294,6 +309,56 @@ $('ship').onclick = async () => {
   try { await chars.ship.writeValue(Uint8Array.of(0x01)); log('Ship mode requested.'); }
   catch(e){ log('Ship write failed: '+e.message); }
 };
+
+// ---- Capture -> CSV + optional Google Sheet ----
+let lastAccel = [0,0,0];
+let recording = false, recBuf = [], recStart = 0;
+const SHEET_KEY = 'metashot_sheet_url';
+$('sheetUrl').value = localStorage.getItem(SHEET_KEY) || '';
+$('sheetUrl').onchange = () => localStorage.setItem(SHEET_KEY, $('sheetUrl').value.trim());
+
+function recordSample(W,X,Y,Z) {
+  const t = Math.round(performance.now() - recStart);
+  recBuf.push([t, W, X, Y, Z, lastAccel[0], lastAccel[1], lastAccel[2]]);
+  $('capCount').textContent = recBuf.length;
+}
+function startCapture() {
+  recBuf = []; recStart = performance.now(); recording = true;
+  $('capStatus').textContent = 'recording…'; $('capStatus').style.color = 'var(--err)';
+  $('capCount').textContent = '0';
+  $('capture').textContent = '■ Stop & Save'; $('cancelCap').disabled = false;
+  log('Capture started.');
+}
+async function stopCapture() {
+  recording = false;
+  $('capStatus').textContent = 'idle'; $('capStatus').style.color = 'var(--mut)';
+  $('capture').textContent = '● Capture'; $('cancelCap').disabled = true;
+  if (!recBuf.length) { log('Capture stopped (no samples).'); return; }
+  const header = 't_ms,qw,qx,qy,qz,ax_g,ay_g,az_g';
+  const csv = header + '\n' + recBuf.map(r => r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'metashot_capture.csv'; a.click();
+  log('Saved ' + recBuf.length + ' samples to CSV.');
+  const url = $('sheetUrl').value.trim();
+  if (url) {
+    try {
+      await fetch(url, { method:'POST', mode:'no-cors',
+        headers:{'Content-Type':'text/plain'},
+        body: JSON.stringify({ header: header.split(','), rows: recBuf }) });
+      log('Pushed ' + recBuf.length + ' rows to Google Sheet.');
+    } catch (e) { log('Sheet push failed: ' + e.message); }
+  }
+}
+function cancelCapture() {
+  recording = false; recBuf = [];
+  $('capStatus').textContent = 'idle'; $('capStatus').style.color = 'var(--mut)';
+  $('capCount').textContent = '0';
+  $('capture').textContent = '● Capture'; $('cancelCap').disabled = true;
+  log('Capture cancelled (discarded).');
+}
+$('capture').onclick = () => recording ? stopCapture() : startCapture();
+$('cancelCap').onclick = cancelCapture;
 
 if (!navigator.bluetooth) log('Web Bluetooth not supported here. Use desktop Chrome or Edge.');
 </script>
