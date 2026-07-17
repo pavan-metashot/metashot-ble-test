@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Metashot BLE Test</title>
+<style>
+  :root { --bg:#0e1116; --panel:#171c24; --line:#262d38; --txt:#e6edf3; --mut:#8b97a7;
+          --acc:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.4 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0; font-weight:600; }
+  .grow { flex:1; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-weight:600; cursor:pointer; }
+  button.sec { background:#222b38; color:var(--txt); border:1px solid var(--line); }
+  button.danger { background:var(--err); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  #dot { width:10px; height:10px; border-radius:50%; background:var(--err); }
+  #dot.on { background:var(--ok); }
+  main { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:14px; padding:18px; max-width:1200px; margin:0 auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); margin:0 0 12px; }
+  .row { display:flex; justify-content:space-between; padding:4px 0; font-variant-numeric:tabular-nums; }
+  .row span:first-child { color:var(--mut); }
+  .big { font-size:28px; font-weight:700; font-variant-numeric:tabular-nums; }
+  /* 3D cube */
+  .scene { perspective:600px; height:200px; display:flex; align-items:center; justify-content:center; }
+  .cube { width:90px; height:90px; position:relative; transform-style:preserve-3d; transition:transform .03s linear; }
+  .face { position:absolute; width:90px; height:90px; border:2px solid #0e1116; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; color:#0e1116; opacity:.92; }
+  .fz1{background:#3b82f6;transform:translateZ(45px)} .fz2{background:#1d4ed8;transform:rotateY(180deg) translateZ(45px)}
+  .fx1{background:#22c55e;transform:rotateY(90deg) translateZ(45px)} .fx2{background:#15803d;transform:rotateY(-90deg) translateZ(45px)}
+  .fy1{background:#f59e0b;transform:rotateX(90deg) translateZ(45px)} .fy2{background:#b45309;transform:rotateX(-90deg) translateZ(45px)}
+  .bar { height:8px; background:#222b38; border-radius:4px; overflow:hidden; margin-top:4px; }
+  .bar > i { display:block; height:100%; background:var(--acc); width:50%; }
+  #log { height:150px; overflow:auto; background:#0b0e13; border:1px solid var(--line); border-radius:8px; padding:8px; font-family:ui-monospace,Consolas,monospace; font-size:12px; color:var(--mut); white-space:pre-wrap; }
+  .ctl { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  input[type=number] { width:90px; background:#0b0e13; border:1px solid var(--line); color:var(--txt); border-radius:6px; padding:6px 8px; }
+  .hint { color:var(--mut); font-size:12px; margin-top:8px; }
+  a { color:var(--acc); }
+</style>
+</head>
+<body>
+<header>
+  <span id="dot"></span>
+  <h1>Metashot BLE Test</h1>
+  <span id="status" style="color:var(--mut)">Disconnected</span>
+  <span class="grow"></span>
+  <button id="connect">Connect BLE</button>
+  <button id="connectSerial" class="sec">Connect Serial</button>
+  <button id="disconnect" class="sec" disabled>Disconnect</button>
+</header>
+
+<main>
+  <div class="card">
+    <h2>Orientation (quaternion)</h2>
+    <div class="scene"><div class="cube" id="cube">
+      <div class="face fz1">+Z</div><div class="face fz2">-Z</div>
+      <div class="face fx1">+X</div><div class="face fx2">-X</div>
+      <div class="face fy1">+Y</div><div class="face fy2">-Y</div>
+    </div></div>
+    <div class="row"><span>W</span><span id="qw">—</span></div>
+    <div class="row"><span>X</span><span id="qx">—</span></div>
+    <div class="row"><span>Y</span><span id="qy">—</span></div>
+    <div class="row"><span>Z</span><span id="qz">—</span></div>
+    <div class="row"><span>rate</span><span id="qhz">— Hz</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Raw accelerometer (g)</h2>
+    <div class="row"><span>X</span><span id="ax">—</span></div><div class="bar"><i id="bx"></i></div>
+    <div class="row"><span>Y</span><span id="ay">—</span></div><div class="bar"><i id="by"></i></div>
+    <div class="row"><span>Z</span><span id="az">—</span></div><div class="bar"><i id="bz"></i></div>
+    <div class="row" style="margin-top:8px"><span>|a|</span><span id="amag">—</span></div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Raw IMU — ICM-42688-P (unfiltered LSB counts, for distributor)</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px">
+      <div class="row"><span>accel X</span><span id="rax">—</span></div>
+      <div class="row"><span>gyro X</span><span id="rgx">—</span></div>
+      <div class="row"><span>accel Y</span><span id="ray">—</span></div>
+      <div class="row"><span>gyro Y</span><span id="rgy">—</span></div>
+      <div class="row"><span>accel Z</span><span id="raz">—</span></div>
+      <div class="row"><span>gyro Z</span><span id="rgz">—</span></div>
+    </div>
+    <div class="ctl" style="margin-top:12px">
+      <button id="rawCapture" class="sec">● Capture Raw</button>
+      <button id="rawCancel" class="sec" disabled>Cancel</button>
+    </div>
+    <div class="row"><span>Status</span><span id="rawStatus">idle</span></div>
+    <div class="row"><span>Samples</span><span id="rawCount">0</span></div>
+    <div class="row"><span>Rate</span><span id="rawHz">— Hz</span></div>
+    <div class="hint">Streams raw accel + gyro register counts (int16, no filter/bias) over BLE 0x0406.
+      Stop &amp; Save downloads <code>t_ms,ax_lsb,ay_lsb,az_lsb,gx_lsb,gy_lsb,gz_lsb</code>.
+      FSR: accel ±8g = 4096 LSB/g, gyro ±2000 dps = 16.4 LSB/dps.</div>
+  </div>
+
+  <div class="card">
+    <h2>Battery</h2>
+    <div class="big"><span id="batt">—</span>%</div>
+    <div class="bar" style="height:12px;margin-top:10px"><i id="battbar" style="background:var(--ok)"></i></div>
+  </div>
+
+  <div class="card">
+    <h2>Device</h2>
+    <div class="row"><span>Name</span><span id="dname">—</span></div>
+    <div class="row"><span>MAC</span><span id="dmac">—</span></div>
+    <div class="row"><span>Manufacturer</span><span id="dmanu">—</span></div>
+    <div class="row"><span>Model</span><span id="dmodel">—</span></div>
+    <div class="row"><span>FW</span><span id="dfw">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Controls</h2>
+    <div class="ctl">
+      <input type="number" id="cmdval" value="10" min="0" max="255" />
+      <button id="sendcmd" class="sec" disabled>Write Command (0x0401)</button>
+    </div>
+    <div class="ctl">
+      <button id="ship" class="danger" disabled>Ship Mode (0x0408 ← 0x01)</button>
+    </div>
+    <div class="hint">Command 10 = short vibration burst (per firmware).</div>
+  </div>
+
+  <div class="card">
+    <h2>Capture / Plot</h2>
+    <div class="ctl">
+      <button id="capture" class="sec">● Capture</button>
+      <button id="cancelCap" class="sec" disabled>Cancel</button>
+    </div>
+    <div class="row"><span>Status</span><span id="capStatus">idle</span></div>
+    <div class="row"><span>Samples</span><span id="capCount">0</span></div>
+    <input type="text" id="sheetUrl" placeholder="Google Apps Script URL (optional)"
+           style="width:100%;margin-top:8px;background:#0b0e13;border:1px solid var(--line);color:var(--txt);border-radius:6px;padding:6px 8px" />
+    <div class="hint">Records quaternion + accel (BLE or UART). Stop &amp; Save downloads a CSV and, if a URL is set, pushes rows to your Google Sheet.</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Events / Log</h2>
+    <div id="log"></div>
+  </div>
+</main>
+
+<script>
+const U = {
+  svc:  'ef680400-9b35-4933-9b10-52ffa9740042',
+  quat: 'ef680404-9b35-4933-9b10-52ffa9740042',
+  raw:  'ef680405-9b35-4933-9b10-52ffa9740042',
+  rawimu: 'ef680406-9b35-4933-9b10-52ffa9740042',
+  cmd:  'ef680401-9b35-4933-9b10-52ffa9740042',
+  dtap: 'ef680407-9b35-4933-9b10-52ffa9740042',
+  mac:  'ef680499-9b35-4933-9b10-52ffa9740042',
+  ship: 'ef680408-9b35-4933-9b10-52ffa9740042',
+};
+const $ = id => document.getElementById(id);
+const log = (m) => { const l=$('log'); const t=new Date().toLocaleTimeString();
+  l.textContent += `[${t}] ${m}\n`; l.scrollTop = l.scrollHeight; };
+
+let device, server, chars = {};
+let qCount = 0, qLast = performance.now();
+let rawCount = 0, rawLast = performance.now();
+
+function setConnected(on) {
+  $('dot').classList.toggle('on', on);
+  $('status').textContent = on ? 'Connected' : 'Disconnected';
+  $('status').style.color = on ? 'var(--ok)' : 'var(--mut)';
+  $('connect').disabled = on; $('disconnect').disabled = !on;
+  $('sendcmd').disabled = !on; $('ship').disabled = !on;
+}
+
+// quaternion (w,x,y,z) -> CSS matrix3d (column-major), with a 90° tilt so it reads nicely
+function applyQuat(w,x,y,z) {
+  const n = Math.hypot(w,x,y,z) || 1; w/=n; x/=n; y/=n; z/=n;
+  const xx=x*x, yy=y*y, zz=z*z, xy=x*y, xz=x*z, yz=y*z, wx=w*x, wy=w*y, wz=w*z;
+  // row-major rotation
+  const m = [
+    1-2*(yy+zz), 2*(xy-wz),   2*(xz+wy),
+    2*(xy+wz),   1-2*(xx+zz), 2*(yz-wx),
+    2*(xz-wy),   2*(yz+wx),   1-2*(xx+yy)
+  ];
+  // CSS matrix3d is column-major
+  const css = `matrix3d(${m[0]},${m[3]},${m[6]},0, ${m[1]},${m[4]},${m[7]},0, ${m[2]},${m[5]},${m[8]},0, 0,0,0,1)`;
+  $('cube').style.transform = css;
+}
+
+// Shared renderers — used by both BLE and Serial paths
+function renderQuat(W,X,Y,Z) {
+  $('qw').textContent=W.toFixed(4); $('qx').textContent=X.toFixed(4);
+  $('qy').textContent=Y.toFixed(4); $('qz').textContent=Z.toFixed(4);
+  applyQuat(W,X,Y,Z);
+  qCount++; const now=performance.now();
+  if (now-qLast>=1000){ $('qhz').textContent=(qCount*1000/(now-qLast)).toFixed(0)+' Hz'; qCount=0; qLast=now; }
+  if (recording) recordSample(W,X,Y,Z);
+}
+function renderAccel(x,y,z) {
+  lastAccel = [x,y,z];
+  $('ax').textContent=x.toFixed(3); $('ay').textContent=y.toFixed(3); $('az').textContent=z.toFixed(3);
+  $('amag').textContent=Math.hypot(x,y,z).toFixed(3)+' g';
+  const pct = a => Math.min(100,Math.abs(a)/2*100); // ±2g range for the bar
+  $('bx').style.width=pct(x)+'%'; $('by').style.width=pct(y)+'%'; $('bz').style.width=pct(z)+'%';
+}
+
+// BLE quat: 8 bytes LE int16[4], order [Z,X,Y,W] x10000
+function onQuat(e) { const v=e.target.value;
+  renderQuat(v.getInt16(6,true)/10000, v.getInt16(2,true)/10000,
+             v.getInt16(4,true)/10000, v.getInt16(0,true)/10000); }
+// BLE raw: 6 bytes LE int16[3] in milli-g
+function onRaw(e) { const v=e.target.value;
+  renderAccel(v.getInt16(0,true)/1000, v.getInt16(2,true)/1000, v.getInt16(4,true)/1000); }
+// BLE raw IMU: 12 bytes LE int16[6] register counts — ax,ay,az,gx,gy,gz (unfiltered)
+function onRawImu(e) { const v=e.target.value;
+  renderRawImu(v.getInt16(0,true), v.getInt16(2,true), v.getInt16(4,true),
+               v.getInt16(6,true), v.getInt16(8,true), v.getInt16(10,true)); }
+function renderRawImu(ax,ay,az,gx,gy,gz) {
+  $('rax').textContent=ax; $('ray').textContent=ay; $('raz').textContent=az;
+  $('rgx').textContent=gx; $('rgy').textContent=gy; $('rgz').textContent=gz;
+  rawCount++; const now=performance.now();
+  if (now-rawLast>=1000){ $('rawHz').textContent=(rawCount*1000/(now-rawLast)).toFixed(0)+' Hz'; rawCount=0; rawLast=now; }
+  if (rawRecording) recordRawSample(ax,ay,az,gx,gy,gz);
+}
+
+function onCmd(e){ log('Command notify: '+[...new Uint8Array(e.target.value.buffer)].join(' ')); }
+function onDtap(e){ log('DoubleTap event: '+e.target.value.getUint8(0)); }
+function onBatt(e){ const p=e.target.value.getUint8(0); $('batt').textContent=p; $('battbar').style.width=p+'%';
+  $('battbar').style.background = p<20?'var(--err)':p<50?'var(--warn)':'var(--ok)'; }
+
+async function readText(svcUuid, charUuid) {
+  try { const s=await server.getPrimaryService(svcUuid); const c=await s.getCharacteristic(charUuid);
+    const v=await c.readValue(); return new TextDecoder().decode(v); } catch { return '—'; }
+}
+
+async function connect() {
+  if (!navigator.bluetooth) { alert('Web Bluetooth not available. Use Chrome/Edge over https or localhost.'); return; }
+  try {
+    log('Requesting device…');
+    device = await navigator.bluetooth.requestDevice({
+      filters:[{namePrefix:'Metashot'}],
+      optionalServices:[U.svc, 'battery_service', 'device_information']
+    });
+    $('dname').textContent = device.name || '—';
+    device.addEventListener('gattserverdisconnected', () => { setConnected(false); log('Disconnected.'); });
+    log('Connecting GATT…');
+    server = await device.gatt.connect();
+
+    const svc = await server.getPrimaryService(U.svc);
+    const get = u => svc.getCharacteristic(u);
+    chars.quat = await get(U.quat); chars.raw = await get(U.raw);
+    chars.cmd = await get(U.cmd);  chars.dtap = await get(U.dtap);
+    chars.mac = await get(U.mac);  chars.ship = await get(U.ship);
+    try { chars.rawimu = await get(U.rawimu); }
+    catch { chars.rawimu = null; log('No raw-IMU characteristic (0x0406) — update firmware for raw accel+gyro.'); }
+
+    // MAC (read)
+    try { const m=new Uint8Array((await chars.mac.readValue()).buffer);
+      $('dmac').textContent=[...m].reverse().map(b=>b.toString(16).padStart(2,'0')).join(':').toUpperCase(); } catch {}
+
+    // DIS
+    $('dmanu').textContent  = await readText('device_information','manufacturer_name_string');
+    $('dmodel').textContent = await readText('device_information','model_number_string');
+    $('dfw').textContent    = await readText('device_information','firmware_revision_string');
+
+    // Battery
+    try { const bs=await server.getPrimaryService('battery_service');
+      const bc=await bs.getCharacteristic('battery_level');
+      onBatt({target:{value:await bc.readValue()}});
+      await bc.startNotifications(); bc.addEventListener('characteristicvaluechanged', onBatt);
+    } catch { log('No battery service.'); }
+
+    // Notifications
+    chars.quat.addEventListener('characteristicvaluechanged', onQuat); await chars.quat.startNotifications();
+    chars.raw.addEventListener('characteristicvaluechanged', onRaw);  await chars.raw.startNotifications();
+    chars.cmd.addEventListener('characteristicvaluechanged', onCmd);  await chars.cmd.startNotifications();
+    chars.dtap.addEventListener('characteristicvaluechanged', onDtap);await chars.dtap.startNotifications();
+    if (chars.rawimu) {
+      chars.rawimu.addEventListener('characteristicvaluechanged', onRawImu);
+      await chars.rawimu.startNotifications();
+    }
+
+    setConnected(true);
+    log('Ready. Streaming quaternion + raw accel' + (chars.rawimu ? ' + raw IMU (accel+gyro counts).' : '.'));
+  } catch (err) { log('Error: '+err.message); }
+}
+
+// ---- Web Serial (UART) ----
+let port, sreader, serialOn = false;
+function setSerial(on) {
+  serialOn = on;
+  const anyConn = on || !!device?.gatt?.connected;
+  $('dot').classList.toggle('on', anyConn);
+  $('status').textContent = on ? 'Serial connected (UART)' : (device?.gatt?.connected ? 'Connected' : 'Disconnected');
+  $('status').style.color = anyConn ? 'var(--ok)' : 'var(--mut)';
+  $('connectSerial').disabled = on;
+  $('disconnect').disabled = !anyConn;
+}
+async function connectSerial() {
+  if (!navigator.serial) { alert('Web Serial needs desktop Chrome or Edge (not mobile).'); return; }
+  try {
+    log('Requesting serial port…');
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    log('Serial connected @115200. Streaming quaternion from UART.');
+    setSerial(true);
+    pumpSerial();
+  } catch (e) { log('Serial error: ' + e.message); }
+}
+async function pumpSerial() {
+  const dec = new TextDecoderStream();
+  port.readable.pipeTo(dec.writable).catch(()=>{});
+  sreader = dec.readable.getReader();
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await sreader.read();
+      if (done) break;
+      buf += value;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        parseSerial(line);
+      }
+    }
+  } catch (e) { log('Serial read stopped: ' + e.message); }
+}
+function parseSerial(line) {
+  // Firmware: "Q,Z,X,Y,W" (x10000) and "A,x,y,z" (mg)
+  if (line.startsWith('Q,')) { const p = line.split(',');
+    if (p.length >= 5) renderQuat(+p[4]/10000, +p[2]/10000, +p[3]/10000, +p[1]/10000); }
+  else if (line.startsWith('A,')) { const p = line.split(',');
+    if (p.length >= 4) renderAccel(+p[1]/1000, +p[2]/1000, +p[3]/1000); }
+}
+async function disconnectSerial() {
+  try { if (sreader) await sreader.cancel(); } catch {}
+  try { if (port) await port.close(); } catch {}
+  port = null; sreader = null; setSerial(false); log('Serial disconnected.');
+}
+
+$('connect').onclick = connect;
+$('connectSerial').onclick = connectSerial;
+$('disconnect').onclick = () => {
+  if (device?.gatt?.connected) device.gatt.disconnect();
+  if (serialOn) disconnectSerial();
+};
+$('sendcmd').onclick = async () => {
+  try { await chars.cmd.writeValue(Uint8Array.of(+$('cmdval').value & 0xff)); log('Wrote command '+$('cmdval').value); }
+  catch(e){ log('Write failed: '+e.message); }
+};
+$('ship').onclick = async () => {
+  if (!confirm('Put device into PMIC ship mode? It will power off.')) return;
+  try { await chars.ship.writeValue(Uint8Array.of(0x01)); log('Ship mode requested.'); }
+  catch(e){ log('Ship write failed: '+e.message); }
+};
+
+// ---- Capture -> CSV + optional Google Sheet ----
+let lastAccel = [0,0,0];
+let recording = false, recBuf = [], recStart = 0;
+const SHEET_KEY = 'metashot_sheet_url';
+$('sheetUrl').value = localStorage.getItem(SHEET_KEY) || '';
+$('sheetUrl').onchange = () => localStorage.setItem(SHEET_KEY, $('sheetUrl').value.trim());
+
+function recordSample(W,X,Y,Z) {
+  const t = Math.round(performance.now() - recStart);
+  recBuf.push([t, W, X, Y, Z, lastAccel[0], lastAccel[1], lastAccel[2]]);
+  $('capCount').textContent = recBuf.length;
+}
+function startCapture() {
+  recBuf = []; recStart = performance.now(); recording = true;
+  $('capStatus').textContent = 'recording…'; $('capStatus').style.color = 'var(--err)';
+  $('capCount').textContent = '0';
+  $('capture').textContent = '■ Stop & Save'; $('cancelCap').disabled = false;
+  log('Capture started.');
+}
+async function stopCapture() {
+  recording = false;
+  $('capStatus').textContent = 'idle'; $('capStatus').style.color = 'var(--mut)';
+  $('capture').textContent = '● Capture'; $('cancelCap').disabled = true;
+  if (!recBuf.length) { log('Capture stopped (no samples).'); return; }
+  const header = 't_ms,qw,qx,qy,qz,ax_g,ay_g,az_g';
+  const csv = header + '\n' + recBuf.map(r => r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'metashot_capture.csv'; a.click();
+  log('Saved ' + recBuf.length + ' samples to CSV.');
+  const url = $('sheetUrl').value.trim();
+  if (url) {
+    try {
+      await fetch(url, { method:'POST', mode:'no-cors',
+        headers:{'Content-Type':'text/plain'},
+        body: JSON.stringify({ header: header.split(','), rows: recBuf }) });
+      log('Pushed ' + recBuf.length + ' rows to Google Sheet.');
+    } catch (e) { log('Sheet push failed: ' + e.message); }
+  }
+}
+function cancelCapture() {
+  recording = false; recBuf = [];
+  $('capStatus').textContent = 'idle'; $('capStatus').style.color = 'var(--mut)';
+  $('capCount').textContent = '0';
+  $('capture').textContent = '● Capture'; $('cancelCap').disabled = true;
+  log('Capture cancelled (discarded).');
+}
+$('capture').onclick = () => recording ? stopCapture() : startCapture();
+$('cancelCap').onclick = cancelCapture;
+
+// ---- Raw IMU capture (unfiltered accel+gyro LSB counts) -> CSV for distributor ----
+let rawRecording = false, rawBuf = [], rawStart = 0;
+function recordRawSample(ax,ay,az,gx,gy,gz) {
+  const t = Math.round(performance.now() - rawStart);
+  rawBuf.push([t, ax, ay, az, gx, gy, gz]);
+  $('rawCount').textContent = rawBuf.length;
+}
+function startRawCapture() {
+  if (!chars.rawimu) { log('Cannot capture raw: device has no 0x0406 (update firmware).'); return; }
+  rawBuf = []; rawStart = performance.now(); rawRecording = true;
+  $('rawStatus').textContent = 'recording…'; $('rawStatus').style.color = 'var(--err)';
+  $('rawCount').textContent = '0';
+  $('rawCapture').textContent = '■ Stop & Save'; $('rawCancel').disabled = false;
+  log('Raw IMU capture started.');
+}
+function stopRawCapture() {
+  rawRecording = false;
+  $('rawStatus').textContent = 'idle'; $('rawStatus').style.color = 'var(--mut)';
+  $('rawCapture').textContent = '● Capture Raw'; $('rawCancel').disabled = true;
+  if (!rawBuf.length) { log('Raw capture stopped (no samples).'); return; }
+  const header = 't_ms,ax_lsb,ay_lsb,az_lsb,gx_lsb,gy_lsb,gz_lsb';
+  const csv = header + '\n' + rawBuf.map(r => r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'icm42688p_raw.csv'; a.click();
+  log('Saved ' + rawBuf.length + ' raw samples to icm42688p_raw.csv (FSR: accel ±8g/4096 LSB/g, gyro ±2000dps/16.4 LSB/dps).');
+}
+function cancelRawCapture() {
+  rawRecording = false; rawBuf = [];
+  $('rawStatus').textContent = 'idle'; $('rawStatus').style.color = 'var(--mut)';
+  $('rawCount').textContent = '0';
+  $('rawCapture').textContent = '● Capture Raw'; $('rawCancel').disabled = true;
+  log('Raw capture cancelled (discarded).');
+}
+$('rawCapture').onclick = () => rawRecording ? stopRawCapture() : startRawCapture();
+$('rawCancel').onclick = cancelRawCapture;
+
+if (!navigator.bluetooth) log('Web Bluetooth not supported here. Use desktop Chrome or Edge.');
+</script>
+</body>
+</html>
