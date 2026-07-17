@@ -92,7 +92,8 @@
     <div class="row"><span>Samples</span><span id="rawCount">0</span></div>
     <div class="row"><span>Rate</span><span id="rawHz">— Hz</span></div>
     <div class="hint">Streams raw accel + gyro register counts (int16, no filter/bias) over BLE 0x0406.
-      Stop &amp; Save downloads <code>t_ms,ax_lsb,ay_lsb,az_lsb,gx_lsb,gy_lsb,gz_lsb</code>.
+      Stop &amp; Save downloads raw counts <b>plus</b> converted g/dps columns:
+      <code>t_ms,ax_lsb…gz_lsb,ax_g…az_g,gx_dps…gz_dps</code>.
       FSR: accel ±8g = 4096 LSB/g, gyro ±2000 dps = 16.4 LSB/dps.</div>
   </div>
 
@@ -421,12 +422,19 @@ function stopRawCapture() {
   $('rawStatus').textContent = 'idle'; $('rawStatus').style.color = 'var(--mut)';
   $('rawCapture').textContent = '● Capture Raw'; $('rawCancel').disabled = true;
   if (!rawBuf.length) { log('Raw capture stopped (no samples).'); return; }
-  const header = 't_ms,ax_lsb,ay_lsb,az_lsb,gx_lsb,gy_lsb,gz_lsb';
-  const csv = header + '\n' + rawBuf.map(r => r.join(',')).join('\n');
+  // FSR at capture: accel ±8g -> 4096 LSB/g, gyro ±2000dps -> 16.4 LSB/dps.
+  const A_LSB_PER_G = 4096, G_LSB_PER_DPS = 16.4;
+  const header = 't_ms,ax_lsb,ay_lsb,az_lsb,gx_lsb,gy_lsb,gz_lsb,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps';
+  const csv = header + '\n' + rawBuf.map(r => {
+    const [t,ax,ay,az,gx,gy,gz] = r;
+    return [t, ax, ay, az, gx, gy, gz,
+      (ax/A_LSB_PER_G).toFixed(4), (ay/A_LSB_PER_G).toFixed(4), (az/A_LSB_PER_G).toFixed(4),
+      (gx/G_LSB_PER_DPS).toFixed(3), (gy/G_LSB_PER_DPS).toFixed(3), (gz/G_LSB_PER_DPS).toFixed(3)].join(',');
+  }).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
   a.download = 'icm42688p_raw.csv'; a.click();
-  log('Saved ' + rawBuf.length + ' raw samples to icm42688p_raw.csv (FSR: accel ±8g/4096 LSB/g, gyro ±2000dps/16.4 LSB/dps).');
+  log('Saved ' + rawBuf.length + ' raw samples to icm42688p_raw.csv (raw counts + g/dps; FSR accel ±8g/4096 LSB/g, gyro ±2000dps/16.4 LSB/dps).');
 }
 function cancelRawCapture() {
   rawRecording = false; rawBuf = [];
