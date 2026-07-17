@@ -74,6 +74,28 @@
     <div class="row" style="margin-top:8px"><span>|a|</span><span id="amag">—</span></div>
   </div>
 
+  <div class="card" style="grid-column:1/-1">
+    <h2>Raw IMU — ICM-42688-P (unfiltered LSB counts, for distributor)</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px">
+      <div class="row"><span>accel X</span><span id="rax">—</span></div>
+      <div class="row"><span>gyro X</span><span id="rgx">—</span></div>
+      <div class="row"><span>accel Y</span><span id="ray">—</span></div>
+      <div class="row"><span>gyro Y</span><span id="rgy">—</span></div>
+      <div class="row"><span>accel Z</span><span id="raz">—</span></div>
+      <div class="row"><span>gyro Z</span><span id="rgz">—</span></div>
+    </div>
+    <div class="ctl" style="margin-top:12px">
+      <button id="rawCapture" class="sec">● Capture Raw</button>
+      <button id="rawCancel" class="sec" disabled>Cancel</button>
+    </div>
+    <div class="row"><span>Status</span><span id="rawStatus">idle</span></div>
+    <div class="row"><span>Samples</span><span id="rawCount">0</span></div>
+    <div class="row"><span>Rate</span><span id="rawHz">— Hz</span></div>
+    <div class="hint">Streams raw accel + gyro register counts (int16, no filter/bias) over BLE 0x0406.
+      Stop &amp; Save downloads <code>t_ms,ax_lsb,ay_lsb,az_lsb,gx_lsb,gy_lsb,gz_lsb</code>.
+      FSR: accel ±8g = 4096 LSB/g, gyro ±2000 dps = 16.4 LSB/dps.</div>
+  </div>
+
   <div class="card">
     <h2>Battery</h2>
     <div class="big"><span id="batt">—</span>%</div>
@@ -125,6 +147,7 @@ const U = {
   svc:  'ef680400-9b35-4933-9b10-52ffa9740042',
   quat: 'ef680404-9b35-4933-9b10-52ffa9740042',
   raw:  'ef680405-9b35-4933-9b10-52ffa9740042',
+  rawimu: 'ef680406-9b35-4933-9b10-52ffa9740042',
   cmd:  'ef680401-9b35-4933-9b10-52ffa9740042',
   dtap: 'ef680407-9b35-4933-9b10-52ffa9740042',
   mac:  'ef680499-9b35-4933-9b10-52ffa9740042',
@@ -136,6 +159,7 @@ const log = (m) => { const l=$('log'); const t=new Date().toLocaleTimeString();
 
 let device, server, chars = {};
 let qCount = 0, qLast = performance.now();
+let rawCount = 0, rawLast = performance.now();
 
 function setConnected(on) {
   $('dot').classList.toggle('on', on);
@@ -184,6 +208,17 @@ function onQuat(e) { const v=e.target.value;
 // BLE raw: 6 bytes LE int16[3] in milli-g
 function onRaw(e) { const v=e.target.value;
   renderAccel(v.getInt16(0,true)/1000, v.getInt16(2,true)/1000, v.getInt16(4,true)/1000); }
+// BLE raw IMU: 12 bytes LE int16[6] register counts — ax,ay,az,gx,gy,gz (unfiltered)
+function onRawImu(e) { const v=e.target.value;
+  renderRawImu(v.getInt16(0,true), v.getInt16(2,true), v.getInt16(4,true),
+               v.getInt16(6,true), v.getInt16(8,true), v.getInt16(10,true)); }
+function renderRawImu(ax,ay,az,gx,gy,gz) {
+  $('rax').textContent=ax; $('ray').textContent=ay; $('raz').textContent=az;
+  $('rgx').textContent=gx; $('rgy').textContent=gy; $('rgz').textContent=gz;
+  rawCount++; const now=performance.now();
+  if (now-rawLast>=1000){ $('rawHz').textContent=(rawCount*1000/(now-rawLast)).toFixed(0)+' Hz'; rawCount=0; rawLast=now; }
+  if (rawRecording) recordRawSample(ax,ay,az,gx,gy,gz);
+}
 
 function onCmd(e){ log('Command notify: '+[...new Uint8Array(e.target.value.buffer)].join(' ')); }
 function onDtap(e){ log('DoubleTap event: '+e.target.value.getUint8(0)); }
@@ -213,6 +248,8 @@ async function connect() {
     chars.quat = await get(U.quat); chars.raw = await get(U.raw);
     chars.cmd = await get(U.cmd);  chars.dtap = await get(U.dtap);
     chars.mac = await get(U.mac);  chars.ship = await get(U.ship);
+    try { chars.rawimu = await get(U.rawimu); }
+    catch { chars.rawimu = null; log('No raw-IMU characteristic (0x0406) — update firmware for raw accel+gyro.'); }
 
     // MAC (read)
     try { const m=new Uint8Array((await chars.mac.readValue()).buffer);
@@ -235,9 +272,13 @@ async function connect() {
     chars.raw.addEventListener('characteristicvaluechanged', onRaw);  await chars.raw.startNotifications();
     chars.cmd.addEventListener('characteristicvaluechanged', onCmd);  await chars.cmd.startNotifications();
     chars.dtap.addEventListener('characteristicvaluechanged', onDtap);await chars.dtap.startNotifications();
+    if (chars.rawimu) {
+      chars.rawimu.addEventListener('characteristicvaluechanged', onRawImu);
+      await chars.rawimu.startNotifications();
+    }
 
     setConnected(true);
-    log('Ready. Streaming quaternion + raw accel.');
+    log('Ready. Streaming quaternion + raw accel' + (chars.rawimu ? ' + raw IMU (accel+gyro counts).' : '.'));
   } catch (err) { log('Error: '+err.message); }
 }
 
@@ -359,6 +400,43 @@ function cancelCapture() {
 }
 $('capture').onclick = () => recording ? stopCapture() : startCapture();
 $('cancelCap').onclick = cancelCapture;
+
+// ---- Raw IMU capture (unfiltered accel+gyro LSB counts) -> CSV for distributor ----
+let rawRecording = false, rawBuf = [], rawStart = 0;
+function recordRawSample(ax,ay,az,gx,gy,gz) {
+  const t = Math.round(performance.now() - rawStart);
+  rawBuf.push([t, ax, ay, az, gx, gy, gz]);
+  $('rawCount').textContent = rawBuf.length;
+}
+function startRawCapture() {
+  if (!chars.rawimu) { log('Cannot capture raw: device has no 0x0406 (update firmware).'); return; }
+  rawBuf = []; rawStart = performance.now(); rawRecording = true;
+  $('rawStatus').textContent = 'recording…'; $('rawStatus').style.color = 'var(--err)';
+  $('rawCount').textContent = '0';
+  $('rawCapture').textContent = '■ Stop & Save'; $('rawCancel').disabled = false;
+  log('Raw IMU capture started.');
+}
+function stopRawCapture() {
+  rawRecording = false;
+  $('rawStatus').textContent = 'idle'; $('rawStatus').style.color = 'var(--mut)';
+  $('rawCapture').textContent = '● Capture Raw'; $('rawCancel').disabled = true;
+  if (!rawBuf.length) { log('Raw capture stopped (no samples).'); return; }
+  const header = 't_ms,ax_lsb,ay_lsb,az_lsb,gx_lsb,gy_lsb,gz_lsb';
+  const csv = header + '\n' + rawBuf.map(r => r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'icm42688p_raw.csv'; a.click();
+  log('Saved ' + rawBuf.length + ' raw samples to icm42688p_raw.csv (FSR: accel ±8g/4096 LSB/g, gyro ±2000dps/16.4 LSB/dps).');
+}
+function cancelRawCapture() {
+  rawRecording = false; rawBuf = [];
+  $('rawStatus').textContent = 'idle'; $('rawStatus').style.color = 'var(--mut)';
+  $('rawCount').textContent = '0';
+  $('rawCapture').textContent = '● Capture Raw'; $('rawCancel').disabled = true;
+  log('Raw capture cancelled (discarded).');
+}
+$('rawCapture').onclick = () => rawRecording ? stopRawCapture() : startRawCapture();
+$('rawCancel').onclick = cancelRawCapture;
 
 if (!navigator.bluetooth) log('Web Bluetooth not supported here. Use desktop Chrome or Edge.');
 </script>
