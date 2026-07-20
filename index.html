@@ -186,11 +186,39 @@ function applyQuat(w,x,y,z) {
   $('cube').style.transform = css;
 }
 
+// --- Smooth rendering: slerp the cube toward the latest quaternion on a 60 fps
+// loop, so BLE's per-connection-event delivery (bursty, ~7.5-15 ms) and the odd
+// dropped/stale packet never show up as a hitch. Numeric readouts still update
+// instantly per packet; only the 3D view is interpolated. ---
+let dispQ = [1,0,0,0];    // currently displayed orientation
+let targetQ = [1,0,0,0];  // latest received orientation
+let renderRunning = false;
+const SMOOTH = 0.5;       // easing per frame, 0..1 (higher = snappier, lower = smoother)
+
+function qslerp(a, b, t) {
+  let [aw,ax,ay,az] = a, [bw,bx,by,bz] = b;
+  let dot = aw*bw + ax*bx + ay*by + az*bz;
+  if (dot < 0) { bw=-bw; bx=-bx; by=-by; bz=-bz; dot=-dot; }   // shortest path
+  if (dot > 0.9995) {                                          // near-parallel: lerp
+    let w=aw+t*(bw-aw), x=ax+t*(bx-ax), y=ay+t*(by-ay), z=az+t*(bz-az);
+    let n=Math.hypot(w,x,y,z)||1; return [w/n,x/n,y/n,z/n];
+  }
+  let th0=Math.acos(dot), s=Math.sin(th0), th=th0*t;
+  let s0=Math.cos(th)-dot*Math.sin(th)/s, s1=Math.sin(th)/s;
+  return [aw*s0+bw*s1, ax*s0+bx*s1, ay*s0+by*s1, az*s0+bz*s1];
+}
+function renderLoop() {
+  dispQ = qslerp(dispQ, targetQ, SMOOTH);
+  applyQuat(dispQ[0], dispQ[1], dispQ[2], dispQ[3]);
+  requestAnimationFrame(renderLoop);
+}
+
 // Shared renderers — used by both BLE and Serial paths
 function renderQuat(W,X,Y,Z) {
   $('qw').textContent=W.toFixed(4); $('qx').textContent=X.toFixed(4);
   $('qy').textContent=Y.toFixed(4); $('qz').textContent=Z.toFixed(4);
-  applyQuat(W,X,Y,Z);
+  const n = Math.hypot(W,X,Y,Z) || 1; targetQ = [W/n, X/n, Y/n, Z/n];
+  if (!renderRunning) { renderRunning = true; dispQ = targetQ.slice(); requestAnimationFrame(renderLoop); }
   qCount++; const now=performance.now();
   if (now-qLast>=1000){ $('qhz').textContent=(qCount*1000/(now-qLast)).toFixed(0)+' Hz'+(motionDrops?` (${motionDrops} drops)`:''); qCount=0; qLast=now; }
   if (recording) recordSample(W,X,Y,Z);
