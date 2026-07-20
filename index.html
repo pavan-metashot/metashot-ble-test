@@ -75,7 +75,7 @@
   </div>
 
   <div class="card" style="grid-column:1/-1">
-    <h2>Raw IMU — ICM-42688-P (unfiltered LSB counts, for distributor)</h2>
+    <h2>Raw gyro — ICM-42688-P (unfiltered LSB counts, for validation)</h2>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px">
       <div class="row"><span>accel X</span><span id="rax">—</span></div>
       <div class="row"><span>gyro X</span><span id="rgx">—</span></div>
@@ -91,10 +91,11 @@
     <div class="row"><span>Status</span><span id="rawStatus">idle</span></div>
     <div class="row"><span>Samples</span><span id="rawCount">0</span></div>
     <div class="row"><span>Rate</span><span id="rawHz">— Hz</span></div>
-    <div class="hint">Streams raw accel + gyro register counts (int16, no filter/bias) over BLE 0x0406.
-      Stop &amp; Save downloads raw counts <b>plus</b> converted g/dps columns:
-      <code>t_ms,ax_lsb…gz_lsb,ax_g…az_g,gx_dps…gz_dps</code>.
-      FSR: accel ±8g = 4096 LSB/g, gyro ±2000 dps = 16.4 LSB/dps.</div>
+    <div class="hint">Raw gyro register counts (int16, no bias/deadzone) now ride inside the
+      0x0404 motion packet at offsets 10–15. Accel is no longer streamed.
+      Stop &amp; Save downloads raw counts <b>plus</b> converted dps columns:
+      <code>t_ms,gx_lsb,gy_lsb,gz_lsb,gx_dps,gy_dps,gz_dps</code>.
+      FSR: gyro ±2000 dps = 16.4 LSB/dps.</div>
   </div>
 
   <div class="card">
@@ -191,7 +192,7 @@ function renderQuat(W,X,Y,Z) {
   $('qy').textContent=Y.toFixed(4); $('qz').textContent=Z.toFixed(4);
   applyQuat(W,X,Y,Z);
   qCount++; const now=performance.now();
-  if (now-qLast>=1000){ $('qhz').textContent=(qCount*1000/(now-qLast)).toFixed(0)+' Hz'; qCount=0; qLast=now; }
+  if (now-qLast>=1000){ $('qhz').textContent=(qCount*1000/(now-qLast)).toFixed(0)+' Hz'+(motionDrops?` (${motionDrops} drops)`:''); qCount=0; qLast=now; }
   if (recording) recordSample(W,X,Y,Z);
 }
 function renderAccel(x,y,z) {
@@ -202,24 +203,36 @@ function renderAccel(x,y,z) {
   $('bx').style.width=pct(x)+'%'; $('by').style.width=pct(y)+'%'; $('bz').style.width=pct(z)+'%';
 }
 
-// BLE quat: 8 bytes LE int16[4], order [Z,X,Y,W] x10000
+// BLE motion sample: 16 bytes LE
+//   0  u16 seq                              (dropped-packet detection)
+//   2  i16 qw,qx,qy,qz  x10000, [w,x,y,z]   (orientation)
+//  10  i16 gx,gy,gz      raw gyro counts     (16.4 LSB/dps, unfiltered)
+// 10-byte packets (older firmware without gyro) are still handled.
+let motionSeq = -1, motionDrops = 0;
 function onQuat(e) { const v=e.target.value;
-  renderQuat(v.getInt16(6,true)/10000, v.getInt16(2,true)/10000,
-             v.getInt16(4,true)/10000, v.getInt16(0,true)/10000); }
+  const seq = v.getUint16(0, true);
+  if (motionSeq >= 0) { const gap = (seq - motionSeq - 1) & 0xffff; if (gap) motionDrops += gap; }
+  motionSeq = seq;
+  renderQuat(v.getInt16(2,true)/10000, v.getInt16(4,true)/10000,
+             v.getInt16(6,true)/10000, v.getInt16(8,true)/10000);
+  if (v.byteLength >= 16) renderGyro(v.getInt16(10,true), v.getInt16(12,true), v.getInt16(14,true)); }
 // BLE raw: 6 bytes LE int16[3] in milli-g
 function onRaw(e) { const v=e.target.value;
   renderAccel(v.getInt16(0,true)/1000, v.getInt16(2,true)/1000, v.getInt16(4,true)/1000); }
-// BLE raw IMU: 12 bytes LE int16[6] register counts — ax,ay,az,gx,gy,gz (unfiltered)
-function onRawImu(e) { const v=e.target.value;
-  renderRawImu(v.getInt16(0,true), v.getInt16(2,true), v.getInt16(4,true),
-               v.getInt16(6,true), v.getInt16(8,true), v.getInt16(10,true)); }
-function renderRawImu(ax,ay,az,gx,gy,gz) {
-  $('rax').textContent=ax; $('ray').textContent=ay; $('raz').textContent=az;
+// Raw gyro now rides inside the 0x0404 motion packet (offsets 10-15). The accel
+// register counts were dropped from the protocol, so those fields read "—".
+function renderGyro(gx,gy,gz) {
   $('rgx').textContent=gx; $('rgy').textContent=gy; $('rgz').textContent=gz;
   rawCount++; const now=performance.now();
   if (now-rawLast>=1000){ $('rawHz').textContent=(rawCount*1000/(now-rawLast)).toFixed(0)+' Hz'; rawCount=0; rawLast=now; }
-  if (rawRecording) recordRawSample(ax,ay,az,gx,gy,gz);
+  if (rawRecording) recordRawSample(gx,gy,gz);
 }
+// Legacy 0x0406 (old firmware): 12 bytes int16[6] ax,ay,az,gx,gy,gz — gyro only
+// is logged to keep the CSV format consistent with the new packet.
+function onRawImu(e) { const v=e.target.value;
+  const gx=v.getInt16(6,true), gy=v.getInt16(8,true), gz=v.getInt16(10,true);
+  $('rax').textContent=v.getInt16(0,true); $('ray').textContent=v.getInt16(2,true); $('raz').textContent=v.getInt16(4,true);
+  renderGyro(gx,gy,gz); }
 
 function onCmd(e){ log('Command notify: '+[...new Uint8Array(e.target.value.buffer)].join(' ')); }
 function onDtap(e){ log('DoubleTap event: '+e.target.value.getUint8(0)); }
@@ -246,11 +259,13 @@ async function connect() {
 
     const svc = await server.getPrimaryService(U.svc);
     const get = u => svc.getCharacteristic(u);
-    chars.quat = await get(U.quat); chars.raw = await get(U.raw);
+    chars.quat = await get(U.quat);
     chars.cmd = await get(U.cmd);  chars.dtap = await get(U.dtap);
     chars.mac = await get(U.mac);  chars.ship = await get(U.ship);
-    try { chars.rawimu = await get(U.rawimu); }
-    catch { chars.rawimu = null; log('No raw-IMU characteristic (0x0406) — update firmware for raw accel+gyro.'); }
+    // 0x0405 (raw accel) and 0x0406 (raw IMU) were removed in the packed-packet
+    // redesign; fetch them only for backward-compat with old firmware builds.
+    try { chars.raw = await get(U.raw); } catch { chars.raw = null; }
+    try { chars.rawimu = await get(U.rawimu); } catch { chars.rawimu = null; }
 
     // MAC (read)
     try { const m=new Uint8Array((await chars.mac.readValue()).buffer);
@@ -270,16 +285,17 @@ async function connect() {
 
     // Notifications
     chars.quat.addEventListener('characteristicvaluechanged', onQuat); await chars.quat.startNotifications();
-    chars.raw.addEventListener('characteristicvaluechanged', onRaw);  await chars.raw.startNotifications();
     chars.cmd.addEventListener('characteristicvaluechanged', onCmd);  await chars.cmd.startNotifications();
     chars.dtap.addEventListener('characteristicvaluechanged', onDtap);await chars.dtap.startNotifications();
+    if (chars.raw) { chars.raw.addEventListener('characteristicvaluechanged', onRaw); await chars.raw.startNotifications(); }
     if (chars.rawimu) {
       chars.rawimu.addEventListener('characteristicvaluechanged', onRawImu);
       await chars.rawimu.startNotifications();
     }
 
     setConnected(true);
-    log('Ready. Streaming quaternion + raw accel' + (chars.rawimu ? ' + raw IMU (accel+gyro counts).' : '.'));
+    log('Ready. Streaming packed motion sample (seq + quaternion + raw gyro) @ ~100 Hz'
+        + (chars.raw ? ' + legacy raw accel' : '') + (chars.rawimu ? ' + legacy raw IMU' : '') + '.');
   } catch (err) { log('Error: '+err.message); }
 }
 
@@ -323,9 +339,21 @@ async function pumpSerial() {
     }
   } catch (e) { log('Serial read stopped: ' + e.message); }
 }
+// Euler (deg) -> quaternion (w,x,y,z). Matches the firmware's roll(X)/pitch(Y)/
+// yaw(Z) convention so the cube tracks the UART "E,roll,pitch,yaw" line.
+function eulerToQuat(rollDeg, pitchDeg, yawDeg) {
+  const d = Math.PI/180, cr=Math.cos(rollDeg*d/2), sr=Math.sin(rollDeg*d/2),
+    cp=Math.cos(pitchDeg*d/2), sp=Math.sin(pitchDeg*d/2),
+    cy=Math.cos(yawDeg*d/2), sy=Math.sin(yawDeg*d/2);
+  return [cr*cp*cy + sr*sp*sy, sr*cp*cy - cr*sp*sy,
+          cr*sp*cy + sr*cp*sy, cr*cp*sy - sr*sp*cy];
+}
 function parseSerial(line) {
-  // Firmware: "Q,Z,X,Y,W" (x10000) and "A,x,y,z" (mg)
-  if (line.startsWith('Q,')) { const p = line.split(',');
+  // Current firmware streams "E,roll,pitch,yaw" (degrees). Legacy "Q,"/"A," are
+  // still accepted so older builds keep working.
+  if (line.startsWith('E,')) { const p = line.split(',');
+    if (p.length >= 4) { const [w,x,y,z] = eulerToQuat(+p[1], +p[2], +p[3]); renderQuat(w,x,y,z); } }
+  else if (line.startsWith('Q,')) { const p = line.split(',');
     if (p.length >= 5) renderQuat(+p[4]/10000, +p[2]/10000, +p[3]/10000, +p[1]/10000); }
   else if (line.startsWith('A,')) { const p = line.split(',');
     if (p.length >= 4) renderAccel(+p[1]/1000, +p[2]/1000, +p[3]/1000); }
@@ -361,7 +389,7 @@ $('sheetUrl').onchange = () => localStorage.setItem(SHEET_KEY, $('sheetUrl').val
 
 function recordSample(W,X,Y,Z) {
   const t = Math.round(performance.now() - recStart);
-  recBuf.push([t, W, X, Y, Z, lastAccel[0], lastAccel[1], lastAccel[2]]);
+  recBuf.push([t, W, X, Y, Z]);
   $('capCount').textContent = recBuf.length;
 }
 function startCapture() {
@@ -376,7 +404,7 @@ async function stopCapture() {
   $('capStatus').textContent = 'idle'; $('capStatus').style.color = 'var(--mut)';
   $('capture').textContent = '● Capture'; $('cancelCap').disabled = true;
   if (!recBuf.length) { log('Capture stopped (no samples).'); return; }
-  const header = 't_ms,qw,qx,qy,qz,ax_g,ay_g,az_g';
+  const header = 't_ms,qw,qx,qy,qz';
   const csv = header + '\n' + recBuf.map(r => r.join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
@@ -402,39 +430,38 @@ function cancelCapture() {
 $('capture').onclick = () => recording ? stopCapture() : startCapture();
 $('cancelCap').onclick = cancelCapture;
 
-// ---- Raw IMU capture (unfiltered accel+gyro LSB counts) -> CSV for distributor ----
+// ---- Raw gyro capture (unfiltered LSB counts from the 0x0404 packet) -> CSV ----
 let rawRecording = false, rawBuf = [], rawStart = 0;
-function recordRawSample(ax,ay,az,gx,gy,gz) {
+function recordRawSample(gx,gy,gz) {
   const t = Math.round(performance.now() - rawStart);
-  rawBuf.push([t, ax, ay, az, gx, gy, gz]);
+  rawBuf.push([t, gx, gy, gz]);
   $('rawCount').textContent = rawBuf.length;
 }
 function startRawCapture() {
-  if (!chars.rawimu) { log('Cannot capture raw: device has no 0x0406 (update firmware).'); return; }
+  if (motionSeq < 0) { log('Cannot capture raw: no motion packets received yet.'); return; }
   rawBuf = []; rawStart = performance.now(); rawRecording = true;
   $('rawStatus').textContent = 'recording…'; $('rawStatus').style.color = 'var(--err)';
   $('rawCount').textContent = '0';
   $('rawCapture').textContent = '■ Stop & Save'; $('rawCancel').disabled = false;
-  log('Raw IMU capture started.');
+  log('Raw gyro capture started.');
 }
 function stopRawCapture() {
   rawRecording = false;
   $('rawStatus').textContent = 'idle'; $('rawStatus').style.color = 'var(--mut)';
   $('rawCapture').textContent = '● Capture Raw'; $('rawCancel').disabled = true;
   if (!rawBuf.length) { log('Raw capture stopped (no samples).'); return; }
-  // FSR at capture: accel ±8g -> 4096 LSB/g, gyro ±2000dps -> 16.4 LSB/dps.
-  const A_LSB_PER_G = 4096, G_LSB_PER_DPS = 16.4;
-  const header = 't_ms,ax_lsb,ay_lsb,az_lsb,gx_lsb,gy_lsb,gz_lsb,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps';
+  // Gyro FSR ±2000 dps -> 16.4 LSB/dps.
+  const G_LSB_PER_DPS = 16.4;
+  const header = 't_ms,gx_lsb,gy_lsb,gz_lsb,gx_dps,gy_dps,gz_dps';
   const csv = header + '\n' + rawBuf.map(r => {
-    const [t,ax,ay,az,gx,gy,gz] = r;
-    return [t, ax, ay, az, gx, gy, gz,
-      (ax/A_LSB_PER_G).toFixed(4), (ay/A_LSB_PER_G).toFixed(4), (az/A_LSB_PER_G).toFixed(4),
+    const [t,gx,gy,gz] = r;
+    return [t, gx, gy, gz,
       (gx/G_LSB_PER_DPS).toFixed(3), (gy/G_LSB_PER_DPS).toFixed(3), (gz/G_LSB_PER_DPS).toFixed(3)].join(',');
   }).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
   a.download = 'icm42688p_raw.csv'; a.click();
-  log('Saved ' + rawBuf.length + ' raw samples to icm42688p_raw.csv (raw counts + g/dps; FSR accel ±8g/4096 LSB/g, gyro ±2000dps/16.4 LSB/dps).');
+  log('Saved ' + rawBuf.length + ' raw gyro samples to icm42688p_raw.csv (counts + dps; FSR ±2000dps/16.4 LSB/dps).');
 }
 function cancelRawCapture() {
   rawRecording = false; rawBuf = [];
