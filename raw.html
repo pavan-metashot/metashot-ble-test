@@ -91,8 +91,8 @@
     <div class="row"><span>Status</span><span id="rawStatus">idle</span></div>
     <div class="row"><span>Samples</span><span id="rawCount">0</span></div>
     <div class="row"><span>Rate</span><span id="rawHz">— Hz</span></div>
-    <div class="hint">Raw gyro register counts (int16, no bias/deadzone) now ride inside the
-      0x0404 motion packet at offsets 10–15. Accel is no longer streamed.
+    <div class="hint">Raw gyro register counts (int16, no bias/deadzone) ride inside the
+      0x0404 motion packet at offsets 10–15; accel (milli-g) at offsets 16–21.
       Stop &amp; Save downloads raw counts <b>plus</b> converted dps columns:
       <code>t_ms,gx_lsb,gy_lsb,gz_lsb,gx_dps,gy_dps,gz_dps</code>.
       FSR: gyro ±2000 dps = 16.4 LSB/dps.</div>
@@ -231,11 +231,12 @@ function renderAccel(x,y,z) {
   $('bx').style.width=pct(x)+'%'; $('by').style.width=pct(y)+'%'; $('bz').style.width=pct(z)+'%';
 }
 
-// BLE motion sample: 16 bytes LE
+// BLE motion sample: 22 bytes LE
 //   0  u16 seq                              (dropped-packet detection)
 //   2  i16 qw,qx,qy,qz  x10000, [w,x,y,z]   (orientation)
 //  10  i16 gx,gy,gz      raw gyro counts     (16.4 LSB/dps, unfiltered)
-// 10-byte packets (older firmware without gyro) are still handled.
+//  16  i16 ax,ay,az      milli-g             (g = value/1000, for speed/impact)
+// Shorter packets (older firmware: 16 = no accel, 10 = no gyro) still handled.
 let motionSeq = -1, motionDrops = 0;
 function onQuat(e) { const v=e.target.value;
   const seq = v.getUint16(0, true);
@@ -243,7 +244,8 @@ function onQuat(e) { const v=e.target.value;
   motionSeq = seq;
   renderQuat(v.getInt16(2,true)/10000, v.getInt16(4,true)/10000,
              v.getInt16(6,true)/10000, v.getInt16(8,true)/10000);
-  if (v.byteLength >= 16) renderGyro(v.getInt16(10,true), v.getInt16(12,true), v.getInt16(14,true)); }
+  if (v.byteLength >= 16) renderGyro(v.getInt16(10,true), v.getInt16(12,true), v.getInt16(14,true));
+  if (v.byteLength >= 22) renderAccel(v.getInt16(16,true)/1000, v.getInt16(18,true)/1000, v.getInt16(20,true)/1000); }
 // BLE raw: 6 bytes LE int16[3] in milli-g
 function onRaw(e) { const v=e.target.value;
   renderAccel(v.getInt16(0,true)/1000, v.getInt16(2,true)/1000, v.getInt16(4,true)/1000); }
@@ -417,7 +419,7 @@ $('sheetUrl').onchange = () => localStorage.setItem(SHEET_KEY, $('sheetUrl').val
 
 function recordSample(W,X,Y,Z) {
   const t = Math.round(performance.now() - recStart);
-  recBuf.push([t, W, X, Y, Z]);
+  recBuf.push([t, W, X, Y, Z, lastAccel[0], lastAccel[1], lastAccel[2]]);
   $('capCount').textContent = recBuf.length;
 }
 function startCapture() {
@@ -432,7 +434,7 @@ async function stopCapture() {
   $('capStatus').textContent = 'idle'; $('capStatus').style.color = 'var(--mut)';
   $('capture').textContent = '● Capture'; $('cancelCap').disabled = true;
   if (!recBuf.length) { log('Capture stopped (no samples).'); return; }
-  const header = 't_ms,qw,qx,qy,qz';
+  const header = 't_ms,qw,qx,qy,qz,ax_g,ay_g,az_g';
   const csv = header + '\n' + recBuf.map(r => r.join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
