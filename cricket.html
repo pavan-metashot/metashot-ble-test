@@ -1,0 +1,362 @@
+<title>Metashot Cricket — Bat Tracker v1</title>
+<style>
+  :root {
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+
+    /* stadium-night default */
+    --bg: #0c1512;
+    --panel: #12201b;
+    --panel-2: #16271f;
+    --line: #23362c;
+    --line-2: #2e463a;
+    --text: #e9f1ea;
+    --muted: #93a89b;
+    --faint: #6d8377;
+    --turf: #2f9e57;          /* pitch green accent */
+    --turf-ink: #7fe0a2;
+    --leather: #c8412e;       /* ball red — impact/semantic */
+    --leather-ink: #ff8a76;
+    --willow: #d9b36b;        /* bat blade */
+    --willow-dk: #a07d3e;
+    --cane: #e7d7b0;          /* handle */
+    --shadow: 0 2px 6px rgba(0,0,0,.35), 0 18px 50px rgba(0,0,0,.5);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #eef3ee; --panel: #ffffff; --panel-2: #f2f6f1; --line: #dbe5dd; --line-2: #c8d6cb;
+      --text: #12201a; --muted: #566b5d; --faint: #7e9184; --turf: #1f8f49; --turf-ink: #0e6a34;
+      --leather: #bb3a28; --leather-ink: #9a2c1d; --willow: #c69b4f; --willow-dk: #9a7636;
+      --cane: #cbb688; --shadow: 0 2px 6px rgba(20,40,30,.08), 0 18px 40px rgba(20,40,30,.12);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#0c1512; --panel:#12201b; --panel-2:#16271f; --line:#23362c; --line-2:#2e463a;
+    --text:#e9f1ea; --muted:#93a89b; --faint:#6d8377; --turf:#2f9e57; --turf-ink:#7fe0a2;
+    --leather:#c8412e; --leather-ink:#ff8a76; --willow:#d9b36b; --willow-dk:#a07d3e; --cane:#e7d7b0;
+    --shadow: 0 2px 6px rgba(0,0,0,.35), 0 18px 50px rgba(0,0,0,.5);
+  }
+  :root[data-theme="light"] {
+    --bg:#eef3ee; --panel:#ffffff; --panel-2:#f2f6f1; --line:#dbe5dd; --line-2:#c8d6cb;
+    --text:#12201a; --muted:#566b5d; --faint:#7e9184; --turf:#1f8f49; --turf-ink:#0e6a34;
+    --leather:#bb3a28; --leather-ink:#9a2c1d; --willow:#c69b4f; --willow-dk:#9a7636; --cane:#cbb688;
+    --shadow: 0 2px 6px rgba(20,40,30,.08), 0 18px 40px rgba(20,40,30,.12);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+    -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 22px 20px 60px; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    flex-wrap: wrap; margin-bottom: 18px; }
+  .brand .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--turf-ink); font-weight: 600; }
+  .brand h1 { margin: 3px 0 0; font-size: 22px; letter-spacing: -.01em; font-weight: 800; }
+  .conn { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--faint) 25%, transparent); }
+  .dot.on { background: var(--turf); box-shadow: 0 0 0 3px color-mix(in srgb, var(--turf) 30%, transparent); }
+  .status { font-size: 13px; color: var(--muted); min-width: 90px; }
+
+  button { font-family: var(--sans); font-size: 14px; font-weight: 600; cursor: pointer;
+    border-radius: 9px; border: 1px solid var(--line-2); background: var(--panel); color: var(--text);
+    padding: 9px 15px; transition: transform .06s ease, background .15s ease; }
+  button:hover { background: var(--panel-2); }
+  button:active { transform: translateY(1px); }
+  button.primary { background: var(--turf); border-color: var(--turf); color: #05130a; }
+  button.primary:hover { filter: brightness(1.05); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  .grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 16px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow); overflow: hidden; }
+  .card h2 { margin: 0; padding: 12px 16px; font-size: 12px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--faint); font-family: var(--mono);
+    border-bottom: 1px solid var(--line); }
+
+  /* ---- 3D stage ---- */
+  .stage { position: relative; height: 420px; perspective: 900px;
+    background:
+      radial-gradient(120% 90% at 50% 12%, color-mix(in srgb, var(--turf) 14%, transparent), transparent 60%),
+      var(--panel-2);
+    display: grid; place-items: center; overflow: hidden; }
+  .pitch { position: absolute; bottom: -40px; left: 50%; width: 210px; height: 340px;
+    transform: translateX(-50%) rotateX(74deg); transform-style: preserve-3d;
+    background: repeating-linear-gradient(0deg, color-mix(in srgb, var(--turf) 30%, #6b4f2a) 0 26px, color-mix(in srgb, var(--turf) 22%, #5e4626) 26px 52px);
+    border-radius: 8px; opacity: .5; filter: blur(.3px); }
+  .scene { transform-style: preserve-3d; }
+  .bat { position: relative; transform-style: preserve-3d; will-change: transform; }
+  .face { position: absolute; left: 50%; top: 50%; }
+  .blade { background: linear-gradient(180deg, color-mix(in srgb,var(--willow) 92%, #fff), var(--willow));
+    border: 1px solid var(--willow-dk); box-shadow: inset 0 0 22px rgba(0,0,0,.12); }
+  .blade.edge { background: var(--willow-dk); }
+  .blade.back { background: color-mix(in srgb, var(--willow) 72%, #000); }
+  .handle { background: repeating-linear-gradient(90deg, var(--cane) 0 5px, color-mix(in srgb,var(--cane) 80%, #000) 5px 7px);
+    border: 1px solid var(--willow-dk); }
+  .handle.back { background: color-mix(in srgb, var(--cane) 70%, #000); }
+  .toe-badge { position: absolute; left: 0; bottom: 8px; font-family: var(--mono); font-size: 10.5px;
+    color: var(--faint); padding: 4px 8px; }
+
+  .impact-flash { position: absolute; inset: 0; background: radial-gradient(circle at 50% 45%, var(--leather), transparent 55%);
+    opacity: 0; pointer-events: none; }
+  .impact-flash.hit { animation: flash .5s ease-out; }
+  @keyframes flash { 0% { opacity: .55; } 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .impact-flash.hit { animation: none; } }
+
+  .stage-ctl { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; }
+  .hz { position: absolute; right: 12px; top: 12px; font-family: var(--mono); font-size: 11px;
+    color: var(--faint); }
+
+  /* ---- readouts ---- */
+  .readouts { padding: 6px 16px 16px; }
+  .metric { padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .metric:last-child { border-bottom: none; }
+  .metric .lab { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--faint); display: flex; justify-content: space-between; }
+  .metric .big { font-size: 34px; font-weight: 800; letter-spacing: -.02em; margin-top: 2px;
+    font-variant-numeric: tabular-nums; }
+  .metric .big small { font-size: 15px; font-weight: 600; color: var(--muted); margin-left: 4px; }
+  .metric.speed .big { color: var(--turf-ink); }
+  .metric.impact .big { color: var(--leather-ink); }
+  .bar { height: 8px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line);
+    margin-top: 9px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; width: 0%; border-radius: 6px;
+    background: linear-gradient(90deg, var(--turf), var(--turf-ink)); transition: width .08s linear; }
+  .peak-tag { color: var(--muted); font-weight: 600; }
+
+  .settings { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px;
+    border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .settings input[type=number] { width: 70px; font-family: var(--mono); font-size: 13px; padding: 5px 7px;
+    border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text); }
+  .quat { padding: 10px 16px 14px; font-family: var(--mono); font-size: 12px; color: var(--muted);
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 10px; }
+  .quat b { color: var(--text); font-weight: 600; }
+
+  .log { margin-top: 16px; font-family: var(--mono); font-size: 12px; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    height: 92px; overflow: auto; white-space: pre-wrap; }
+  .hint { font-size: 12.5px; color: var(--faint); margin-top: 10px; }
+  a { color: var(--turf-ink); }
+  :focus-visible { outline: 2px solid var(--turf); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="eyebrow">Metashot · Sensor → Game Prototype</div>
+      <h1>Cricket Bat Tracker <span class="mono" style="font-size:13px;color:var(--faint)">v1</span></h1>
+    </div>
+    <div class="conn">
+      <span class="dot" id="dot"></span>
+      <span class="status" id="status">Disconnected</span>
+      <button class="primary" id="connect">Connect bat</button>
+      <button id="disconnect" disabled>Disconnect</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Bat orientation</h2>
+      <div class="stage">
+        <div class="pitch"></div>
+        <div class="scene">
+          <div class="bat" id="bat"></div>
+        </div>
+        <div class="impact-flash" id="flash"></div>
+        <div class="hz" id="hz">— Hz</div>
+        <div class="stage-ctl">
+          <button id="recenter">⟲ Recenter</button>
+          <span class="mono" style="font-size:11px;color:var(--faint)">or press the bat button</span>
+        </div>
+      </div>
+      <div class="quat" id="quat">
+        <span>qw <b id="qw">—</b></span><span>qx <b id="qx">—</b></span>
+        <span>qy <b id="qy">—</b></span><span>qz <b id="qz">—</b></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Live swing</h2>
+      <div class="readouts">
+        <div class="metric speed">
+          <div class="lab"><span>Bat speed</span><span class="peak-tag">peak <span id="speedPeak">0.0</span></span></div>
+          <div class="big"><span id="speed">0.0</span><small>km/h</small></div>
+          <div class="bar"><span id="speedBar"></span></div>
+        </div>
+        <div class="metric impact">
+          <div class="lab"><span>Impact</span><span class="peak-tag">peak <span id="impPeak">0.0</span> g</span></div>
+          <div class="big"><span id="impact">1.0</span><small>g</small></div>
+          <div class="bar"><span id="impBar" style="background:linear-gradient(90deg,var(--leather),var(--leather-ink))"></span></div>
+        </div>
+        <div class="metric">
+          <div class="lab"><span>Angular rate |ω|</span><span id="btnTag" class="peak-tag">btn —</span></div>
+          <div class="big"><span id="omega">0</span><small>°/s</small></div>
+        </div>
+      </div>
+      <div class="settings">
+        <label>Pivot → bat-head <b class="mono" style="color:var(--text)">r</b></label>
+        <input type="number" id="radius" value="0.85" min="0.2" max="1.5" step="0.05"> <span>m</span>
+        <button id="resetPeak" style="margin-left:auto">Reset peaks</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+  <div class="hint">Prototype on the live 100 Hz stream — everything runs in the browser, no firmware change. Chrome/Edge (desktop or Android); iOS uses the Bluefy browser. Next: bowl-a-ball → timing → 1/2/4/6.</div>
+</div>
+
+<script>
+  const U = {
+    svc:  'ef680400-9b35-4933-9b10-52ffa9740042',
+    motion:'ef680404-9b35-4933-9b10-52ffa9740042',
+    btn:  'ef680407-9b35-4933-9b10-52ffa9740042',
+  };
+  const $ = id => document.getElementById(id);
+  const log = m => { const l=$('log'); l.textContent += m+'\n'; l.scrollTop=l.scrollHeight; };
+
+  /* ---------- quaternion helpers ---------- */
+  const qNorm = q => { const n=Math.hypot(q[0],q[1],q[2],q[3])||1; return [q[0]/n,q[1]/n,q[2]/n,q[3]/n]; };
+  const qConj = q => [q[0],-q[1],-q[2],-q[3]];
+  const qMul = (a,b) => [
+    a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
+    a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
+    a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
+    a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0],
+  ];
+  function qSlerp(a,b,t){
+    let [aw,ax,ay,az]=a,[bw,bx,by,bz]=b, d=aw*bw+ax*bx+ay*by+az*bz;
+    if(d<0){bw=-bw;bx=-bx;by=-by;bz=-bz;d=-d;}
+    if(d>0.9995){const w=aw+t*(bw-aw),x=ax+t*(bx-ax),y=ay+t*(by-ay),z=az+t*(bz-az),n=Math.hypot(w,x,y,z)||1;return[w/n,x/n,y/n,z/n];}
+    const th0=Math.acos(d),s=Math.sin(th0),th=th0*t,s0=Math.cos(th)-d*Math.sin(th)/s,s1=Math.sin(th)/s;
+    return [aw*s0+bw*s1,ax*s0+bx*s1,ay*s0+by*s1,az*s0+bz*s1];
+  }
+  function quatMatrix3d(w,x,y,z){
+    const xx=x*x,yy=y*y,zz=z*z,xy=x*y,xz=x*z,yz=y*z,wx=w*x,wy=w*y,wz=w*z;
+    const m=[1-2*(yy+zz),2*(xy-wz),2*(xz+wy), 2*(xy+wz),1-2*(xx+zz),2*(yz-wx), 2*(xz-wy),2*(yz+wx),1-2*(xx+yy)];
+    return `matrix3d(${m[0]},${m[3]},${m[6]},0, ${m[1]},${m[4]},${m[7]},0, ${m[2]},${m[5]},${m[8]},0, 0,0,0,1)`;
+  }
+
+  /* ---------- build the 3D bat (blade + handle boxes, cube technique) ---------- */
+  function makeBox(parent, w, h, d, oy, faceCls) {
+    const hw=w/2, hh=h/2, hd=d/2;
+    const F = [
+      ['front', `translateZ(${hd}px)`, w, h, ''],
+      ['back',  `translateZ(${-hd}px) rotateY(180deg)`, w, h, 'back'],
+      ['right', `translateX(${hw}px) rotateY(90deg)`, d, h, 'edge'],
+      ['left',  `translateX(${-hw}px) rotateY(-90deg)`, d, h, 'edge'],
+      ['top',   `translateY(${-hh}px) rotateX(90deg)`, w, d, 'edge'],
+      ['bottom',`translateY(${hh}px) rotateX(-90deg)`, w, d, 'edge'],
+    ];
+    for (const [nm, tf, fw, fh, extra] of F) {
+      const el = document.createElement('div');
+      el.className = `face ${faceCls} ${extra} ${nm}`;
+      el.style.width = fw+'px'; el.style.height = fh+'px';
+      el.style.transform = `translate(-50%,-50%) translateY(${oy}px) ${tf}`;
+      parent.appendChild(el);
+    }
+  }
+  const batEl = $('bat');
+  // blade: wide-ish, long, thin; handle: narrow, shorter, above the blade (-Y is up)
+  makeBox(batEl, 60, 210, 16, 55, 'blade');    // blade centred low
+  makeBox(batEl, 20, 95, 20, -105, 'handle');  // handle up top
+
+  /* ---------- state ---------- */
+  let device, motionChar, btnChar;
+  let rawQ = [1,0,0,0];        // latest sensor quaternion
+  let refConj = [1,0,0,0];     // recenter reference (inverse)
+  let dispQ = [1,0,0,0];       // smoothed displayed quaternion
+  let started = false;
+  let lastBtn = -1;
+  let speedPeak = 0, impPeak = 0;
+  let frames = 0, tHz = performance.now();
+
+  function setConnected(on){
+    $('dot').classList.toggle('on', on);
+    $('status').textContent = on ? 'Connected' : 'Disconnected';
+    $('connect').disabled = on; $('disconnect').disabled = !on;
+  }
+  function recenter(){ refConj = qConj(qNorm(rawQ)); log('↻ Recentered'); }
+  $('recenter').onclick = recenter;
+  $('resetPeak').onclick = () => { speedPeak=0; impPeak=0; $('speedPeak').textContent='0.0'; $('impPeak').textContent='0.0'; };
+
+  /* ---------- render loop ---------- */
+  function render(){
+    // orientation relative to the recenter reference
+    const shown = qMul(refConj, rawQ);
+    dispQ = qSlerp(dispQ, shown, 0.5);
+    batEl.style.transform = quatMatrix3d(dispQ[0],dispQ[1],dispQ[2],dispQ[3]);
+    requestAnimationFrame(render);
+  }
+
+  /* ---------- packet parsing ---------- */
+  function onMotion(e){
+    const v = e.target.value;
+    // quaternion
+    rawQ = qNorm([v.getInt16(2,true)/1e4, v.getInt16(4,true)/1e4, v.getInt16(6,true)/1e4, v.getInt16(8,true)/1e4]);
+    $('qw').textContent=rawQ[0].toFixed(3); $('qx').textContent=rawQ[1].toFixed(3);
+    $('qy').textContent=rawQ[2].toFixed(3); $('qz').textContent=rawQ[3].toFixed(3);
+
+    if (!started){ started=true; dispQ = qMul(refConj, rawQ); recenter(); requestAnimationFrame(render); }
+
+    // gyro -> angular speed -> bat speed (v = w*r)
+    let omega=0, gPresent = v.byteLength>=16;
+    if (gPresent){
+      const gx=v.getInt16(10,true)/16.4, gy=v.getInt16(12,true)/16.4, gz=v.getInt16(14,true)/16.4;
+      omega = Math.hypot(gx,gy,gz);                 // deg/s
+      const r = parseFloat($('radius').value)||0.85;
+      const mps = (omega*Math.PI/180)*r;            // m/s
+      const kmh = mps*3.6;
+      $('omega').textContent = omega.toFixed(0);
+      $('speed').textContent = kmh.toFixed(1);
+      $('speedBar').style.width = Math.min(100, kmh/120*100)+'%';   // scale to ~120 km/h
+      if (kmh>speedPeak){ speedPeak=kmh; $('speedPeak').textContent=kmh.toFixed(1)+' km/h'; }
+    }
+
+    // accel -> impact magnitude
+    if (v.byteLength>=22){
+      const ax=v.getInt16(16,true)/1e3, ay=v.getInt16(18,true)/1e3, az=v.getInt16(20,true)/1e3;
+      const g = Math.hypot(ax,ay,az);
+      $('impact').textContent = g.toFixed(1);
+      $('impBar').style.width = Math.min(100, g/8*100)+'%';         // ±8g range
+      if (g>impPeak){ impPeak=g; $('impPeak').textContent=g.toFixed(1); }
+      if (g>3.0){ const f=$('flash'); f.classList.remove('hit'); void f.offsetWidth; f.classList.add('hit'); }
+    }
+
+    frames++; const now=performance.now();
+    if (now-tHz>=1000){ $('hz').textContent=(frames*1000/(now-tHz)).toFixed(0)+' Hz'; frames=0; tHz=now; }
+  }
+
+  function onBtn(e){
+    const val = e.target.value.getUint8(0);
+    if (val!==lastBtn){ lastBtn=val; $('btnTag').textContent='btn 0x'+val.toString(16).padStart(2,'0');
+      recenter(); }   // any button press recenters the bat
+  }
+
+  /* ---------- BLE ---------- */
+  async function connect(){
+    if(!navigator.bluetooth){ alert('Web Bluetooth needs Chrome/Edge (desktop or Android), or Bluefy on iOS.'); return; }
+    try{
+      log('Requesting bat…');
+      device = await navigator.bluetooth.requestDevice({ filters:[{namePrefix:'Metashot'}], optionalServices:[U.svc] });
+      device.addEventListener('gattserverdisconnected', ()=>{ setConnected(false); log('Disconnected.'); });
+      const server = await device.gatt.connect();
+      const svc = await server.getPrimaryService(U.svc);
+      motionChar = await svc.getCharacteristic(U.motion);
+      await motionChar.startNotifications();
+      motionChar.addEventListener('characteristicvaluechanged', onMotion);
+      try{
+        btnChar = await svc.getCharacteristic(U.btn);
+        await btnChar.startNotifications();
+        btnChar.addEventListener('characteristicvaluechanged', onBtn);
+      }catch{ log('Button characteristic not found (recenter still works via the button above).'); }
+      setConnected(true);
+      log('Connected. Hold the bat in your ready stance and press its button (or ⟲ Recenter).');
+    }catch(err){ log('Error: '+err.message); }
+  }
+  $('connect').onclick = connect;
+  $('disconnect').onclick = ()=>{ if(device?.gatt?.connected) device.gatt.disconnect(); };
+</script>
