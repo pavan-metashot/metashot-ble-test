@@ -135,6 +135,13 @@
   .quat { padding: 10px 16px 14px; font-family: var(--mono); font-size: 12px; color: var(--muted);
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 10px; }
   .quat b { color: var(--text); font-weight: 600; }
+  .euler { display: grid; grid-template-columns: repeat(3,1fr); gap: 1px; background: var(--line);
+    border-top: 1px solid var(--line); }
+  .euler > div { background: var(--panel); padding: 11px 10px 10px; text-align: center; cursor: default; }
+  .euler .lab { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--faint); margin-bottom: 2px; }
+  .euler .val { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .euler .deg { font-size: 14px; color: var(--muted); font-weight: 600; }
   .mountcal { padding: 12px 16px 14px; border-top: 1px solid var(--line); }
   .mountcal .lab { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-bottom: 8px; line-height: 1.5; }
   .nudges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
@@ -176,6 +183,11 @@
           <button id="recenter">⟲ Recenter</button>
           <span class="mono" style="font-size:11px;color:var(--faint)">or press the bat button</span>
         </div>
+      </div>
+      <div class="euler">
+        <div><span class="lab">Roll</span><span class="val" id="eRoll">0</span><span class="deg">°</span></div>
+        <div><span class="lab">Pitch</span><span class="val" id="ePitch">0</span><span class="deg">°</span></div>
+        <div><span class="lab">Yaw</span><span class="val" id="eYaw">0</span><span class="deg">°</span></div>
       </div>
       <div class="quat" id="quat">
         <span>qw <b id="qw">—</b></span><span>qx <b id="qx">—</b></span>
@@ -251,6 +263,14 @@
     const th0=Math.acos(d),s=Math.sin(th0),th=th0*t,s0=Math.cos(th)-d*Math.sin(th)/s,s1=Math.sin(th)/s;
     return [aw*s0+bw*s1,ax*s0+bx*s1,ay*s0+by*s1,az*s0+bz*s1];
   }
+  function quatToEuler(w,x,y,z){
+    const R=180/Math.PI;
+    const roll = Math.atan2(2*(w*x+y*z), 1-2*(x*x+y*y))*R;
+    let sp = 2*(w*y-z*x); sp = Math.max(-1, Math.min(1, sp));
+    const pitch = Math.asin(sp)*R;
+    const yaw = Math.atan2(2*(w*z+x*y), 1-2*(y*y+z*z))*R;
+    return [roll, pitch, yaw];
+  }
   function quatMatrix3d(w,x,y,z){
     const xx=x*x,yy=y*y,zz=z*z,xy=x*y,xz=x*z,yz=y*z,wx=w*x,wy=w*y,wz=w*z;
     const m=[1-2*(yy+zz),2*(xy-wz),2*(xz+wy), 2*(xy+wz),1-2*(xx+zz),2*(yz-wx), 2*(xz-wy),2*(yz+wx),1-2*(xx+yy)];
@@ -324,6 +344,10 @@
     const shown = qMul(refConj, batWorld());
     dispQ = qSlerp(dispQ, shown, 0.5);
     batEl.style.transform = quatMatrix3d(dispQ[0],dispQ[1],dispQ[2],dispQ[3]);
+    const e = quatToEuler(dispQ[0],dispQ[1],dispQ[2],dispQ[3]);
+    $('eRoll').textContent = e[0].toFixed(0);
+    $('ePitch').textContent = e[1].toFixed(0);
+    $('eYaw').textContent = e[2].toFixed(0);
     requestAnimationFrame(render);
   }
 
