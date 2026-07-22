@@ -135,6 +135,10 @@
   .quat { padding: 10px 16px 14px; font-family: var(--mono); font-size: 12px; color: var(--muted);
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 10px; }
   .quat b { color: var(--text); font-weight: 600; }
+  .mountcal { padding: 12px 16px 14px; border-top: 1px solid var(--line); }
+  .mountcal .lab { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-bottom: 8px; line-height: 1.5; }
+  .nudges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .nudges button { padding: 6px 10px; font-size: 12.5px; }
 
   .log { margin-top: 16px; font-family: var(--mono); font-size: 12px; color: var(--muted);
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
@@ -176,6 +180,19 @@
       <div class="quat" id="quat">
         <span>qw <b id="qw">—</b></span><span>qx <b id="qx">—</b></span>
         <span>qy <b id="qy">—</b></span><span>qz <b id="qz">—</b></span>
+      </div>
+      <div class="mountcal">
+        <div class="lab">Mount align — tap until the on-screen bat matches your real bat, then Recenter. Saved automatically.</div>
+        <div class="nudges">
+          <button data-ax="x" data-d="90">Roll +90°</button>
+          <button data-ax="x" data-d="-90">Roll −90°</button>
+          <button data-ax="y" data-d="90">Pitch +90°</button>
+          <button data-ax="y" data-d="-90">Pitch −90°</button>
+          <button data-ax="z" data-d="90">Yaw +90°</button>
+          <button data-ax="z" data-d="-90">Yaw −90°</button>
+          <button id="mountReset">Reset</button>
+        </div>
+        <div class="mono" style="font-size:11px;color:var(--faint)">offset q: <span id="mountTxt">1.00, 0.00, 0.00, 0.00</span></div>
       </div>
     </div>
 
@@ -267,6 +284,8 @@
   /* ---------- state ---------- */
   let device, motionChar, btnChar;
   let rawQ = [1,0,0,0];        // latest sensor quaternion
+  let mountQ = [1,0,0,0];      // fixed sensor->bat mounting offset (persisted)
+  try { const s = localStorage.getItem('metashot_mountQ'); if (s) mountQ = JSON.parse(s); } catch {}
   let refConj = [1,0,0,0];     // recenter reference (inverse)
   let dispQ = [1,0,0,0];       // smoothed displayed quaternion
   let started = false;
@@ -279,14 +298,30 @@
     $('status').textContent = on ? 'Connected' : 'Disconnected';
     $('connect').disabled = on; $('disconnect').disabled = !on;
   }
-  function recenter(){ refConj = qConj(qNorm(rawQ)); log('↻ Recentered'); }
+  // bat-frame orientation = sensor world orientation composed with the mount offset
+  const batWorld = () => qMul(rawQ, mountQ);
+  function recenter(){ refConj = qConj(qNorm(batWorld())); log('↻ Recentered'); }
   $('recenter').onclick = recenter;
   $('resetPeak').onclick = () => { speedPeak=0; impPeak=0; $('speedPeak').textContent='0.0'; $('impPeak').textContent='0.0'; };
+
+  /* ---------- mount alignment ---------- */
+  const axisQuat = (axis, deg) => { const h=deg*Math.PI/360, s=Math.sin(h), c=Math.cos(h);
+    return axis==='x'?[c,s,0,0]:axis==='y'?[c,0,s,0]:[c,0,0,s]; };
+  function showMount(){ $('mountTxt').textContent = mountQ.map(n=>n.toFixed(2)).join(', '); }
+  function nudge(axis, deg){
+    mountQ = qNorm(qMul(mountQ, axisQuat(axis, deg)));   // rotate in the bat's local frame
+    localStorage.setItem('metashot_mountQ', JSON.stringify(mountQ));
+    showMount();
+  }
+  document.querySelectorAll('.nudges button[data-ax]').forEach(b =>
+    b.onclick = () => nudge(b.dataset.ax, parseFloat(b.dataset.d)));
+  $('mountReset').onclick = () => { mountQ=[1,0,0,0]; localStorage.removeItem('metashot_mountQ'); showMount(); };
+  showMount();
 
   /* ---------- render loop ---------- */
   function render(){
     // orientation relative to the recenter reference
-    const shown = qMul(refConj, rawQ);
+    const shown = qMul(refConj, batWorld());
     dispQ = qSlerp(dispQ, shown, 0.5);
     batEl.style.transform = quatMatrix3d(dispQ[0],dispQ[1],dispQ[2],dispQ[3]);
     requestAnimationFrame(render);
@@ -300,7 +335,7 @@
     $('qw').textContent=rawQ[0].toFixed(3); $('qx').textContent=rawQ[1].toFixed(3);
     $('qy').textContent=rawQ[2].toFixed(3); $('qz').textContent=rawQ[3].toFixed(3);
 
-    if (!started){ started=true; dispQ = qMul(refConj, rawQ); recenter(); requestAnimationFrame(render); }
+    if (!started){ started=true; recenter(); dispQ = qMul(refConj, batWorld()); requestAnimationFrame(render); }
 
     // gyro -> angular speed -> bat speed (v = w*r)
     let omega=0, gPresent = v.byteLength>=16;
