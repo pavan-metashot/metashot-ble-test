@@ -160,7 +160,7 @@ const U = {
 const $ = id => document.getElementById(id);
 const log = (m) => { const l=$('log'); const t=new Date().toLocaleTimeString();
   l.textContent += `[${t}] ${m}\n`; l.scrollTop = l.scrollHeight; };
-const BUILD = 'autodetect-2026-07-23c';
+const BUILD = 'autodetect-2026-07-23d';
 addEventListener('DOMContentLoaded', () => log('Test tool build: ' + BUILD + ' — old/new firmware auto-detect + packet diagnostic.'));
 
 let device, server, chars = {};
@@ -317,18 +317,33 @@ async function connect() {
     server = await device.gatt.connect();
 
     const svc = await server.getPrimaryService(U.svc);
-    const get = u => svc.getCharacteristic(u);
-    chars.quat = await get(U.quat);
-    chars.cmd = await get(U.cmd);  chars.dtap = await get(U.dtap);
-    chars.mac = await get(U.mac);  chars.ship = await get(U.ship);
-    // 0x0405 (raw accel) and 0x0406 (raw IMU) were removed in the packed-packet
-    // redesign; fetch them only for backward-compat with old firmware builds.
-    try { chars.raw = await get(U.raw); } catch { chars.raw = null; }
-    try { chars.rawimu = await get(U.rawimu); } catch { chars.rawimu = null; }
+    // Every characteristic is fetched independently and logged, so a missing one
+    // on old firmware can never abort the connection.
+    const getOpt = async (u, name) => {
+      try { const c = await svc.getCharacteristic(u); log('  ✓ ' + name); return c; }
+      catch { log('  ✗ ' + name + ' (not present)'); return null; }
+    };
+    log('Discovering characteristics…');
 
-    // MAC (read)
-    try { const m=new Uint8Array((await chars.mac.readValue()).buffer);
-      $('dmac').textContent=[...m].reverse().map(b=>b.toString(16).padStart(2,'0')).join(':').toUpperCase(); } catch {}
+    // Motion is the essential one — grab it and SUBSCRIBE FIRST, before anything
+    // else can throw, so the cube always gets data if the device streams it.
+    chars.quat = await getOpt(U.quat, '0x0404 motion');
+    if (chars.quat) {
+      try { chars.quat.addEventListener('characteristicvaluechanged', onQuat);
+            await chars.quat.startNotifications(); log('  → subscribed to motion 0x0404'); }
+      catch (e) { log('  → motion subscribe FAILED: ' + e.message); }
+    } else { log('  !! no 0x0404 motion characteristic on this device'); }
+
+    // Everything else optional — never aborts the connection.
+    chars.cmd    = await getOpt(U.cmd,    '0x0401 command');
+    chars.dtap   = await getOpt(U.dtap,   '0x0407 button');
+    chars.mac    = await getOpt(U.mac,    '0x0499 mac');
+    chars.ship   = await getOpt(U.ship,   '0x0408 ship');
+    chars.raw    = await getOpt(U.raw,    '0x0405 accel (old fw)');
+    chars.rawimu = await getOpt(U.rawimu, '0x0406 rawimu');
+
+    if (chars.mac) { try { const m=new Uint8Array((await chars.mac.readValue()).buffer);
+      $('dmac').textContent=[...m].reverse().map(b=>b.toString(16).padStart(2,'0')).join(':').toUpperCase(); } catch {} }
 
     // DIS
     $('dmanu').textContent  = await readText('device_information','manufacturer_name_string');
@@ -342,19 +357,16 @@ async function connect() {
       await bc.startNotifications(); bc.addEventListener('characteristicvaluechanged', onBatt);
     } catch { log('No battery service.'); }
 
-    // Notifications
-    chars.quat.addEventListener('characteristicvaluechanged', onQuat); await chars.quat.startNotifications();
-    chars.cmd.addEventListener('characteristicvaluechanged', onCmd);  await chars.cmd.startNotifications();
-    chars.dtap.addEventListener('characteristicvaluechanged', onDtap);await chars.dtap.startNotifications();
-    if (chars.raw) { chars.raw.addEventListener('characteristicvaluechanged', onRaw); await chars.raw.startNotifications(); }
-    if (chars.rawimu) {
-      chars.rawimu.addEventListener('characteristicvaluechanged', onRawImu);
-      await chars.rawimu.startNotifications();
-    }
+    // Subscribe the optional notifiers, each guarded.
+    const subOpt = async (c, h) => { if (!c) return; try {
+      c.addEventListener('characteristicvaluechanged', h); await c.startNotifications(); } catch {} };
+    await subOpt(chars.cmd, onCmd);
+    await subOpt(chars.dtap, onDtap);
+    await subOpt(chars.raw, onRaw);
+    await subOpt(chars.rawimu, onRawImu);
 
     setConnected(true);
-    log('Ready. Auto-detecting firmware protocol from the first motion packet…'
-        + (chars.raw ? ' (0x0405 accel present → old firmware likely)' : ''));
+    log('Ready. Move the device — waiting for the first 0x0404 packet to detect the protocol…');
   } catch (err) { log('Error: '+err.message); }
 }
 
