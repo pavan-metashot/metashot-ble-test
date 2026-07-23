@@ -45,6 +45,7 @@
   <span id="dot"></span>
   <h1>Metashot BLE Test</h1>
   <span id="status" style="color:var(--mut)">Disconnected</span>
+  <span id="fwbadge" style="display:none;font-family:ui-monospace,monospace;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;margin-left:10px"></span>
   <span class="grow"></span>
   <button id="connect">Connect BLE</button>
   <button id="connectSerial" class="sec">Connect Serial</button>
@@ -159,6 +160,8 @@ const U = {
 const $ = id => document.getElementById(id);
 const log = (m) => { const l=$('log'); const t=new Date().toLocaleTimeString();
   l.textContent += `[${t}] ${m}\n`; l.scrollTop = l.scrollHeight; };
+const BUILD = 'autodetect-2026-07-23c';
+addEventListener('DOMContentLoaded', () => log('Test tool build: ' + BUILD + ' — old/new firmware auto-detect + packet diagnostic.'));
 
 let device, server, chars = {};
 let qCount = 0, qLast = performance.now();
@@ -237,16 +240,23 @@ function renderAccel(x,y,z) {
 //                    (accel arrives separately on 0x0405); no seq, no gyro.
 //   NEW firmware  -> >=10 bytes: seq + quat [W,X,Y,Z] x10000 (+ gyro @10, accel @16)
 // Branch per-notification, so swapping between an old and a new device just works.
-let motionSeq = -1, motionDrops = 0, fwFormat = null;
+let motionSeq = -1, motionDrops = 0, fwFormat = null, pktLogged = false;
 function setFw(t){
+  const badge = $('fwtype'); if (badge) badge.textContent = (t==='old' ? 'Legacy (8-byte quat)' : 'v2 (22-byte packet)');
+  const b = $('fwbadge');
+  if (b){ b.style.display='inline-block'; b.textContent = (t==='old' ? '⬤ OLD firmware' : '⬤ NEW firmware');
+    b.style.background = (t==='old' ? '#8a5a12' : '#0b8f9e'); b.style.color='#fff'; }
   if (fwFormat === t) return;
   fwFormat = t;
-  const el = $('fwtype'); if (el) el.textContent = (t==='old' ? 'Legacy (8-byte quat)' : 'v2 (22-byte packet)');
   log(t==='old'
     ? 'Detected OLD firmware — 8-byte quaternion [Z,X,Y,W] + separate 0x0405 accel.'
     : 'Detected NEW firmware — 22-byte packet: seq + quat[W,X,Y,Z] + gyro + accel.');
 }
 function onQuat(e) { const v=e.target.value;
+  if (!pktLogged) { pktLogged = true;
+    const hex = [...new Uint8Array(v.buffer)].map(b=>b.toString(16).padStart(2,'0')).join(' ');
+    log(`0x0404 first packet: ${v.byteLength} bytes → ${hex}`);
+  }
   // ---- OLD firmware: 8-byte quaternion-only, order [Z,X,Y,W] ----
   if (v.byteLength <= 8) {
     setFw('old');
@@ -294,7 +304,8 @@ async function readText(svcUuid, charUuid) {
 async function connect() {
   if (!navigator.bluetooth) { alert('Web Bluetooth not available. Use Chrome/Edge over https or localhost.'); return; }
   try {
-    fwFormat = null; motionSeq = -1; motionDrops = 0; $('fwtype').textContent = '—';   // re-detect on each connect
+    fwFormat = null; motionSeq = -1; motionDrops = 0; pktLogged = false;   // re-detect on each connect
+    $('fwtype').textContent = '—'; $('fwbadge').style.display = 'none';
     log('Requesting device…');
     device = await navigator.bluetooth.requestDevice({
       filters:[{namePrefix:'Metashot'}],
