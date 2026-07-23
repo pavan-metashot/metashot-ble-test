@@ -111,6 +111,7 @@
     <div class="row"><span>Manufacturer</span><span id="dmanu">—</span></div>
     <div class="row"><span>Model</span><span id="dmodel">—</span></div>
     <div class="row"><span>FW</span><span id="dfw">—</span></div>
+    <div class="row"><span>Protocol</span><span id="fwtype">—</span></div>
   </div>
 
   <div class="card">
@@ -231,14 +232,30 @@ function renderAccel(x,y,z) {
   $('bx').style.width=pct(x)+'%'; $('by').style.width=pct(y)+'%'; $('bz').style.width=pct(z)+'%';
 }
 
-// BLE motion sample: 22 bytes LE
-//   0  u16 seq                              (dropped-packet detection)
-//   2  i16 qw,qx,qy,qz  x10000, [w,x,y,z]   (orientation)
-//  10  i16 gx,gy,gz      raw gyro counts     (16.4 LSB/dps, unfiltered)
-//  16  i16 ax,ay,az      milli-g             (g = value/1000, for speed/impact)
-// Shorter packets (older firmware: 16 = no accel, 10 = no gyro) still handled.
-let motionSeq = -1, motionDrops = 0;
+// Auto-detects the firmware protocol from the 0x0404 packet length:
+//   OLD firmware  -> 8 bytes: quaternion only, order [Z,X,Y,W] x10000
+//                    (accel arrives separately on 0x0405); no seq, no gyro.
+//   NEW firmware  -> >=10 bytes: seq + quat [W,X,Y,Z] x10000 (+ gyro @10, accel @16)
+// Branch per-notification, so swapping between an old and a new device just works.
+let motionSeq = -1, motionDrops = 0, fwFormat = null;
+function setFw(t){
+  if (fwFormat === t) return;
+  fwFormat = t;
+  const el = $('fwtype'); if (el) el.textContent = (t==='old' ? 'Legacy (8-byte quat)' : 'v2 (22-byte packet)');
+  log(t==='old'
+    ? 'Detected OLD firmware — 8-byte quaternion [Z,X,Y,W] + separate 0x0405 accel.'
+    : 'Detected NEW firmware — 22-byte packet: seq + quat[W,X,Y,Z] + gyro + accel.');
+}
 function onQuat(e) { const v=e.target.value;
+  // ---- OLD firmware: 8-byte quaternion-only, order [Z,X,Y,W] ----
+  if (v.byteLength <= 8) {
+    setFw('old');
+    renderQuat(v.getInt16(6,true)/10000, v.getInt16(2,true)/10000,   // W, X,
+               v.getInt16(4,true)/10000, v.getInt16(0,true)/10000);  // Y, Z
+    return;                                     // accel comes on 0x0405 (onRaw)
+  }
+  // ---- NEW firmware: seq + quat [W,X,Y,Z] (+ gyro + accel) ----
+  setFw('new');
   const seq = v.getUint16(0, true);
   if (motionSeq >= 0) { const gap = (seq - motionSeq - 1) & 0xffff; if (gap) motionDrops += gap; }
   motionSeq = seq;
@@ -277,6 +294,7 @@ async function readText(svcUuid, charUuid) {
 async function connect() {
   if (!navigator.bluetooth) { alert('Web Bluetooth not available. Use Chrome/Edge over https or localhost.'); return; }
   try {
+    fwFormat = null; motionSeq = -1; motionDrops = 0; $('fwtype').textContent = '—';   // re-detect on each connect
     log('Requesting device…');
     device = await navigator.bluetooth.requestDevice({
       filters:[{namePrefix:'Metashot'}],
@@ -324,8 +342,8 @@ async function connect() {
     }
 
     setConnected(true);
-    log('Ready. Streaming packed motion sample (seq + quaternion + raw gyro) @ ~100 Hz'
-        + (chars.raw ? ' + legacy raw accel' : '') + (chars.rawimu ? ' + legacy raw IMU' : '') + '.');
+    log('Ready. Auto-detecting firmware protocol from the first motion packet…'
+        + (chars.raw ? ' (0x0405 accel present → old firmware likely)' : ''));
   } catch (err) { log('Error: '+err.message); }
 }
 
