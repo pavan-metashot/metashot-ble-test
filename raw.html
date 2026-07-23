@@ -160,7 +160,7 @@ const U = {
 const $ = id => document.getElementById(id);
 const log = (m) => { const l=$('log'); const t=new Date().toLocaleTimeString();
   l.textContent += `[${t}] ${m}\n`; l.scrollTop = l.scrollHeight; };
-const BUILD = 'autodetect-2026-07-23d';
+const BUILD = 'autodetect-2026-07-23e';
 addEventListener('DOMContentLoaded', () => log('Test tool build: ' + BUILD + ' — old/new firmware auto-detect + packet diagnostic.'));
 
 let device, server, chars = {};
@@ -242,30 +242,32 @@ function renderAccel(x,y,z) {
 // Branch per-notification, so swapping between an old and a new device just works.
 let motionSeq = -1, motionDrops = 0, fwFormat = null, pktLogged = false;
 function setFw(t){
-  const badge = $('fwtype'); if (badge) badge.textContent = (t==='old' ? 'Legacy (8-byte quat)' : 'v2 (22-byte packet)');
+  const badge = $('fwtype'); if (badge) badge.textContent = (t==='old' ? 'Legacy (16-byte quat)' : 'v2 (22-byte packet)');
   const b = $('fwbadge');
   if (b){ b.style.display='inline-block'; b.textContent = (t==='old' ? '⬤ OLD firmware' : '⬤ NEW firmware');
     b.style.background = (t==='old' ? '#8a5a12' : '#0b8f9e'); b.style.color='#fff'; }
   if (fwFormat === t) return;
   fwFormat = t;
   log(t==='old'
-    ? 'Detected OLD firmware — 8-byte quaternion [Z,X,Y,W] + separate 0x0405 accel.'
-    : 'Detected NEW firmware — 22-byte packet: seq + quat[W,X,Y,Z] + gyro + accel.');
+    ? 'Protocol: OLD firmware — legacy quaternion-only (int32[4], order [Z,X,Y,W]) + separate 0x0405 accel.'
+    : 'Protocol: NEW firmware — packed 22-byte packet (seq + quat[W,X,Y,Z] + gyro + accel).');
 }
 function onQuat(e) { const v=e.target.value;
   if (!pktLogged) { pktLogged = true;
     const hex = [...new Uint8Array(v.buffer)].map(b=>b.toString(16).padStart(2,'0')).join(' ');
     log(`0x0404 first packet: ${v.byteLength} bytes → ${hex}`);
+    if (fwFormat==='old' && [...new Uint8Array(v.buffer)].every(x=>x===0))
+      log('⚠ Old-firmware quaternion is all zeros -> its IMU is not streaming orientation (device-side, not the web tool).');
   }
-  // ---- OLD firmware: 8-byte quaternion-only, order [Z,X,Y,W] ----
-  if (v.byteLength <= 8) {
-    setFw('old');
-    renderQuat(v.getInt16(6,true)/10000, v.getInt16(2,true)/10000,   // W, X,
-               v.getInt16(4,true)/10000, v.getInt16(0,true)/10000);  // Y, Z
-    return;                                     // accel comes on 0x0405 (onRaw)
+  // ---- OLD firmware: quaternion-only, order [Z,X,Y,W] x10000. int32[4] (16 B) or int16[4] (8 B). ----
+  if (fwFormat === 'old') {
+    let z,x,y,w;
+    if (v.byteLength >= 16) { z=v.getInt32(0,true)/1e4; x=v.getInt32(4,true)/1e4; y=v.getInt32(8,true)/1e4; w=v.getInt32(12,true)/1e4; }
+    else                    { z=v.getInt16(0,true)/1e4; x=v.getInt16(2,true)/1e4; y=v.getInt16(4,true)/1e4; w=v.getInt16(6,true)/1e4; }
+    renderQuat(w,x,y,z);                          // accel comes on 0x0405 (onRaw)
+    return;
   }
   // ---- NEW firmware: seq + quat [W,X,Y,Z] (+ gyro + accel) ----
-  setFw('new');
   const seq = v.getUint16(0, true);
   if (motionSeq >= 0) { const gap = (seq - motionSeq - 1) & 0xffff; if (gap) motionDrops += gap; }
   motionSeq = seq;
@@ -292,7 +294,11 @@ function onRawImu(e) { const v=e.target.value;
   renderGyro(gx,gy,gz); }
 
 function onCmd(e){ log('Command notify: '+[...new Uint8Array(e.target.value.buffer)].join(' ')); }
-function onDtap(e){ log('DoubleTap event: '+e.target.value.getUint8(0)); }
+let lastDtap = null;
+function onDtap(e){ const val=e.target.value.getUint8(0);
+  if (val===lastDtap) return;   // old firmware spams this at 0; only log real changes
+  lastDtap = val;
+  log('Button/tap 0x0407: '+val+' (0x'+val.toString(16).padStart(2,'0')+')'); }
 function onBatt(e){ const p=e.target.value.getUint8(0); $('batt').textContent=p; $('battbar').style.width=p+'%';
   $('battbar').style.background = p<20?'var(--err)':p<50?'var(--warn)':'var(--ok)'; }
 
@@ -325,9 +331,13 @@ async function connect() {
     };
     log('Discovering characteristics…');
 
-    // Motion is the essential one — grab it and SUBSCRIBE FIRST, before anything
-    // else can throw, so the cube always gets data if the device streams it.
+    // Fetch motion + 0x0405 FIRST so we can pick the protocol before the first
+    // packet arrives. OLD firmware exposes 0x0405 (raw accel); NEW does not --
+    // a reliable discriminator, independent of the shared device name.
     chars.quat = await getOpt(U.quat, '0x0404 motion');
+    chars.raw  = await getOpt(U.raw,  '0x0405 accel (old fw)');
+    setFw(chars.raw ? 'old' : 'new');
+
     if (chars.quat) {
       try { chars.quat.addEventListener('characteristicvaluechanged', onQuat);
             await chars.quat.startNotifications(); log('  → subscribed to motion 0x0404'); }
@@ -339,7 +349,6 @@ async function connect() {
     chars.dtap   = await getOpt(U.dtap,   '0x0407 button');
     chars.mac    = await getOpt(U.mac,    '0x0499 mac');
     chars.ship   = await getOpt(U.ship,   '0x0408 ship');
-    chars.raw    = await getOpt(U.raw,    '0x0405 accel (old fw)');
     chars.rawimu = await getOpt(U.rawimu, '0x0406 rawimu');
 
     if (chars.mac) { try { const m=new Uint8Array((await chars.mac.readValue()).buffer);
